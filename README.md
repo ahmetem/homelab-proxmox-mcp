@@ -1,187 +1,186 @@
 # Proxmox MCP Server
 
 A local [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) server
-that lets Claude Desktop (or any MCP-compatible client) manage a **Proxmox VE**
-cluster end to end — from listing VMs to creating ZFS pools, replicating
-snapshots, and running ad-hoc shell commands on the host or guests.
+that lets Claude Desktop (or any MCP-compatible client) manage a
+**Proxmox VE** cluster through its REST API using token authentication.
 
 Tested with **Proxmox VE 9.1.9** on a single-node setup. Multi-node clusters
 should work — every tool accepts a `node` parameter.
 
-> 🇦🇷 Türkçe README için: [README.tr.md](./README.tr.md)
+> 🇹🇷 Türkçe README için: [README.tr.md](./README.tr.md)
 
-## What's in this
+## Features
 
-**52 tools across five phases**, organized into a small Python package
-(`proxmox_mcp/`) with one module per concern. Token-based REST is the default;
-SSH is optional and only activated for a handful of operations that need it.
+The package exposes 55 tools across nine phases. The core/"Phase 0"
+surface (15 tools) is summarised below by category; advanced tools for
+disk preparation, LVM, ZFS, guest SSH, host SSH, LXC exec, and bulk
+snapshot cleanup are also registered — run `python proxmox_mcp.py --help`
+for the full list.
 
-### Phase 0 — cluster, VMs, snapshots, backups (16 tools)
+### Read-only (safe to call automatically)
 
-| Tool | Purpose |
+| Tool | Description |
 |---|---|
-| `proxmox_list_nodes` / `proxmox_get_node_status` | Cluster nodes, CPU/memory/uptime |
-| `proxmox_list_vms` / `proxmox_get_vm_status` | VM and LXC inventory and detail |
-| `proxmox_vm_start` / `vm_shutdown` / `vm_stop` / `vm_reboot` | Power actions |
-| `proxmox_resize_vm` | RAM / CPU resize |
-| `proxmox_list_snapshots` / `create_snapshot` / `rollback_snapshot` / `delete_snapshot` | Snapshot lifecycle |
-| `proxmox_list_backups` / `proxmox_create_backup` | Backups (vzdump) |
-| `proxmox_list_storage` | Per-node storage usage |
+| `proxmox_list_nodes` | List all nodes in the cluster with status, uptime, CPU and memory usage |
+| `proxmox_get_node_status` | Detailed status for one node: CPU model, kernel, load average, disk, swap |
+| `proxmox_list_vms` | List every VM and LXC container across the cluster |
+| `proxmox_get_vm_status` | Detailed runtime metrics for a single VM/CT |
+| `proxmox_list_storage` | Storage pools on a node with usage info |
+| `proxmox_list_backups` | Backup files on a storage |
+| `proxmox_list_snapshots` | Snapshots for a specific VM/CT |
 
-### Phase 1 — read-only inventory (6 tools)
+### Power actions (require `confirm=true`)
 
-| Tool | Purpose |
+| Tool | Description |
 |---|---|
-| `proxmox_list_disks` / `proxmox_get_disk_smart` | Block devices + SMART (HDD/SSD/NVMe) |
-| `proxmox_list_lvm` / `proxmox_list_lvm_thin` | VGs, PVs, LVs, thin pools |
-| `proxmox_list_zfs` / `proxmox_get_zfs_pool` | ZFS pools with vdev tree and error counters |
+| `proxmox_vm_start` | Start a VM or LXC container |
+| `proxmox_vm_shutdown` | Graceful ACPI shutdown |
+| `proxmox_vm_stop` | Force stop (pull the plug) — may cause data loss |
+| `proxmox_vm_reboot` | Graceful reboot, then power cycle if needed |
 
-### Phase 2 — disk prep + pool lifecycle + cluster storage (12 tools)
+### Snapshots & backups (require `confirm=true`)
 
-| Tool | Purpose |
+| Tool | Description |
 |---|---|
-| `proxmox_disk_init_gpt` / `proxmox_wipe_disk` | GPT init / wipefs (REST) |
-| `proxmox_create_lvm_vg` / `proxmox_destroy_lvm_vg` | LVM VG lifecycle |
-| `proxmox_create_lvm_thin` / `proxmox_destroy_lvm_thin` | LVM-thin pool lifecycle |
-| `proxmox_create_zfs_pool` / `proxmox_destroy_zfs_pool` | ZFS pool lifecycle |
-| `proxmox_list_cluster_storage` | `/etc/pve/storage.cfg` view |
-| `proxmox_add_zfs_storage` / `add_dir_storage` / `remove_storage` | Storage entry management |
+| `proxmox_create_snapshot` | Create a snapshot of a VM/CT |
+| `proxmox_rollback_snapshot` | Rollback to a snapshot — data after it is lost |
+| `proxmox_create_backup` | Create a backup with selectable mode and compression |
+| `proxmox_restore_backup` | Restore a VM/CT from a backup archive. Refuses to overwrite an existing VMID unless `force=true` and `i_understand_data_loss=true`. |
 
-### Phase 2.5 — SSH-backed dataset / property / snapshot ops (7 tools)
+### Configuration (requires `confirm=true`)
 
-Proxmox REST refuses API tokens for `wipedisk`/`initgpt`, and doesn't expose
-`zfs create`/`destroy`/`set`/`snapshot` for arbitrary datasets. These tools
-fill the gap via an allow-listed SSH client.
-
-| Tool | Purpose |
+| Tool | Description |
 |---|---|
-| `proxmox_ssh_wipe_disk` / `proxmox_ssh_init_gpt` | SSH-backed wipe / GPT init |
-| `proxmox_zfs_create_dataset` / `proxmox_zfs_destroy_dataset` | Dataset CRUD |
-| `proxmox_zfs_set_property` | Set allow-listed properties (compression, atime, recordsize, …) |
-| `proxmox_zfs_create_snapshot` | `zfs snapshot [-r] ds@name` |
-| `proxmox_zfs_list_datasets` | `zfs list` with optional pool scope / snapshot inclusion |
+| `proxmox_resize_vm` | Change RAM (`memory_mb`) and/or CPU `cores` of a VM/CT |
 
-### Phase 3 — VM disk + ZFS read / scrub / send (7 tools)
+### Guest exec (Phase 4 / 6 — full shell, audit-logged)
 
-| Tool | Purpose |
+| Tool | Description |
 |---|---|
-| `proxmox_move_disk` | Live disk migration QEMU / LXC |
-| `proxmox_clone_vm` | Linked or full clone, optional source snapshot |
-| `proxmox_list_isos` | ISO inventory |
-| `proxmox_zfs_get_property` | Read one or all ZFS properties |
-| `proxmox_zfs_pool_status` | `zpool status [-v]` with health line |
-| `proxmox_zfs_scrub` | Start / stop a pool scrub |
-| `proxmox_zfs_send` | `zfs send → file` or `zfs send \| zfs recv` (replication, raw, incremental) |
+| `proxmox_vm_exec` | Run a shell command on a registered guest VM via SSH (uses `vm_ssh_hosts.json`). Requires `confirm=true`. |
+| `proxmox_lxc_exec` | Run a shell command inside an LXC container via `pct exec` from the Proxmox host. No SSH inside the CT needed. Requires `confirm=true`. |
 
-### Phase 4 — guest VM shell exec (3 tools)
+### Bulk ZFS maintenance (Phase 2.5 — SSH-backed)
 
-| Tool | Purpose |
+| Tool | Description |
 |---|---|
-| `proxmox_vm_list_hosts` | Show aliases from `vm_ssh_hosts.json` |
-| `proxmox_vm_exec` | Full shell command on a registered VM alias (audit-logged) |
-| `proxmox_vm_read_file` | `head -c` wrapper for config/log files |
+| `proxmox_zfs_destroy_snapshots_by_pattern` | Bulk-delete ZFS snapshots whose name matches a glob pattern. Two-step: `dry_run=true` (default) lists matches; setting `dry_run=false` with `confirm=true` and `i_understand_data_loss=true` actually deletes. Capped at `max_delete` (default 1000). |
 
-### Phase 5 — Proxmox host shell exec (1 tool)
+### Built-in safety
 
-| Tool | Purpose |
-|---|---|
-| `proxmox_host_exec` | Full shell command on the Proxmox host (audit-logged) |
-
-## Safety model
-
-1. **Every write requires `confirm=true`.** Read-only tools have no guard.
-2. **Destructive ops also require `i_understand_data_loss=true`.** This applies
-   to wipe, destroy pool/VG, recursive zfs destroy, delete_snapshot, and to
-   `vm_exec` / `host_exec` when the command matches a destructive regex
-   pattern (`rm -rf`, `mkfs`, `dd of=/dev/`, `shutdown`, fork bombs,
-   `zpool destroy`, `qm destroy`, etc.).
-3. **SSH allow-list.** The Phase 2.5 and 3 SSH-backed tools only invoke
-   binaries in a fixed allow-list (`wipefs`, `sgdisk`, `blkdiscard`, `dd`,
-   `zfs`, `zpool`, LVM tools, `lsblk`, `nvme`, `smartctl`). Every argument is
-   `shlex.quote`d before transmission.
-4. **Free-shell exec is audit-logged.** `proxmox_vm_exec` and
-   `proxmox_host_exec` write every call (alias, rc, command, stdout/stderr
-   previews) to `_vm_ssh_audit.log` / `_host_ssh_audit.log` next to the
-   package.
+All destructive or state-changing actions require `confirm=true`. Tools
+that destroy persistent data (snapshot delete, backup restore with
+overwrite, bulk snapshot destroy, ZFS dataset destroy, etc.) additionally
+require `i_understand_data_loss=true`. The agent must explicitly pass
+both flags, which in practice means Claude only fires these after the
+user clearly asks for the action. Read-only tools have no such guard.
 
 ## Requirements
 
 - **Python 3.11+**
-- Proxmox VE host reachable over HTTPS (default port 8006)
-- Proxmox **API token** (see below)
-- Optional: SSH key authorized on the host for Phase 2.5+ tools
+- A Proxmox VE host you can reach over HTTPS (default port 8006)
+- A Proxmox **API token** with the right privileges (see below)
 - Claude Desktop (or any MCP client)
 
 ## 1. Create a Proxmox API token
 
-1. Web UI → **Datacenter → Permissions → API Tokens → Add**
-   - **User**: `root@pam` (or a dedicated user)
-   - **Token ID**: `mcp-server`
-   - **Privilege Separation**: keep enabled
-2. Copy the **secret** value (UUID) shown once.
-3. Grant the token a role: **Datacenter → Permissions → Add → API Token Permission**
-   - **Path**: `/` (or narrower)
-   - **Role**: `PVEAdmin` (full) or `PVEVMAdmin` (VM/CT only)
-   - **Propagate**: checked
+The server authenticates with an API token, never with a root password. Tokens
+can be revoked individually and limit blast radius.
 
-## 2. Install
+1. Log in to the Proxmox web UI.
+2. Go to **Datacenter → Permissions → API Tokens**.
+3. Click **Add**:
+   - **User**: `root@pam` (or a dedicated user — recommended)
+   - **Token ID**: `mcp-server` (any name)
+   - **Privilege Separation**: keep enabled unless you know you want otherwise
+4. Click **Add**. A dialog shows the **secret** value (a UUID) **once**.
+   Copy it now; you cannot retrieve it again.
+
+If you keep Privilege Separation enabled, you must also grant the token
+permissions. Go to **Datacenter → Permissions → Add → API Token Permission**:
+
+- **Path**: `/` (or narrower if you prefer)
+- **API Token**: the token you just made
+- **Role**: `PVEAdmin` for full access, or `PVEVMAdmin` if you only want
+  VM/CT management
+- **Propagate**: checked
+
+You can scope this much more tightly in production. For a homelab `/` with
+`PVEAdmin` is the simplest.
+
+## 2. Install the server
+
+### Windows (PowerShell)
+
+```powershell
+git clone https://github.com/<your-username>/proxmox-mcp.git C:\mcp-servers\proxmox-mcp
+cd C:\mcp-servers\proxmox-mcp
+
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+```
+
+If PowerShell blocks the activation script, run this once in an
+administrator PowerShell:
+
+```powershell
+Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned
+```
+
+### Linux / macOS
 
 ```bash
-git clone https://github.com/ahmetem/proxmox-mcp.git ~/mcp-servers/proxmox-mcp
+git clone https://github.com/<your-username>/proxmox-mcp.git ~/mcp-servers/proxmox-mcp
 cd ~/mcp-servers/proxmox-mcp
+
 python3 -m venv .venv
-source .venv/bin/activate         # Windows: .\.venv\Scripts\Activate.ps1
+source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
 ## 3. Configure `.env`
 
+```powershell
+copy .env.example .env
+notepad .env
+```
+
+Fill in:
+
 ```ini
-PROXMOX_HOST=192.168.1.10
-PROXMOX_PORT=8006
-PROXMOX_USER=root@pam
-PROXMOX_TOKEN_NAME=mcp-server
-PROXMOX_TOKEN_VALUE=xxxxxxxx-xxxx-...
-PROXMOX_VERIFY_SSL=false
+PROXMOX_HOST=192.168.1.10            # IP or hostname of your Proxmox host
+PROXMOX_PORT=8006                    # default
+PROXMOX_USER=root@pam                # the user owning the token
+PROXMOX_TOKEN_NAME=mcp-server        # the Token ID you chose
+PROXMOX_TOKEN_VALUE=xxxxxxxx-xxxx-...  # the secret UUID
+PROXMOX_VERIFY_SSL=false             # most homelabs use self-signed certs
 PROXMOX_TIMEOUT=30
-
-# Optional: only needed for Phase 2.5+ SSH-backed tools and vm/host exec.
-PROXMOX_SSH_HOST=                # defaults to PROXMOX_HOST
-PROXMOX_SSH_PORT=22
-PROXMOX_SSH_USER=root
-PROXMOX_SSH_KEY_PATH=/home/you/.ssh/proxmox_ed25519
-PROXMOX_SSH_KNOWN_HOSTS=         # path to known_hosts; "ignore" on a trusted LAN only
-PROXMOX_SSH_PASSWORD=            # fallback if key not set
-PROXMOX_SSH_TIMEOUT=30
 ```
 
-## 4. Optional: guest VM SSH registry
+**Never** commit `.env` to git. The included `.gitignore` already excludes it,
+but double-check.
 
-`proxmox_vm_exec` / `proxmox_vm_read_file` run commands on guest VMs by
-alias. Create `vm_ssh_hosts.json` next to `.env` (the file is gitignored):
+## 4. Smoke test
 
-```json
-{
-  "_comment": "Keys starting with _ are treated as comments and ignored.",
-  "dockers": {
-    "host": "192.168.1.20",
-    "port": 22,
-    "user": "ahmet",
-    "key_path": "/home/you/.ssh/vm_dockers_ed25519",
-    "known_hosts": "ignore",
-    "description": "Docker host VM 102"
-  }
-}
+With the venv active:
+
+```powershell
+python proxmox_mcp.py --help
 ```
 
-Claude will resolve `alias="dockers"` to this entry. `known_hosts` may be a
-file path, or the literal `"ignore"` on trusted networks.
+You should see the tool list and exit cleanly. An import error here means a
+dependency didn't install correctly.
 
 ## 5. Register with Claude Desktop
 
-Edit `claude_desktop_config.json` (Windows: `%APPDATA%\Claude\`,
-macOS: `~/Library/Application Support/Claude/`,
-Linux: `~/.config/Claude/`):
+Open Claude Desktop's config file:
+
+- **Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
+- **macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
+- **Linux**: `~/.config/Claude/claude_desktop_config.json`
+
+If the file doesn't exist, create it. Add (or extend) the `mcpServers` block:
 
 ```json
 {
@@ -195,86 +194,134 @@ Linux: `~/.config/Claude/`):
 }
 ```
 
-Fully quit Claude Desktop (tray → Quit) and reopen it.
+Adjust paths for your OS. On Windows, double-backslashes are required inside
+JSON strings.
+
+Fully quit Claude Desktop (tray icon → Quit) and reopen it. In a new chat the
+Proxmox tools appear under the hammer/connector icon.
+
+## First test in chat
+
+Start with a read-only call:
+
+> "List my Proxmox nodes."
+
+Claude calls `proxmox_list_nodes`. You should see a list of nodes with their
+status. If you get an authentication error, recheck `PROXMOX_TOKEN_VALUE` and
+the token's permissions.
+
+Then try:
+
+> "Show me all VMs."
+>
+> "What's the status of VM 101?"
+>
+> "List backups on the local storage of node pve."
+
+Once you're confident the read-only tools work, you can try action tools:
+
+> "Reboot VM 101."
+
+Claude will ask you to confirm. After you say yes, it calls
+`proxmox_vm_reboot` with `confirm=true`.
 
 ## Example workflows
 
-**Healthcheck:** *"Show me node status and any storage pool above 80%."*
-Claude calls `proxmox_list_nodes`, `proxmox_list_storage`, summarises.
+**Resize a VM and reboot it:**
 
-**Move a VM disk:** *"Move VM 102's scsi0 from vmdata to nvmepool, keep the
-original as unused."*
-Claude calls `proxmox_move_disk` with `delete_source=false, confirm=true`.
+> "Set VM 101 to 4 GB of RAM, then reboot it."
 
-**ZFS housekeeping:** *"Start a scrub on nvmepool, then show zpool status."*
-Claude calls `proxmox_zfs_scrub` then `proxmox_zfs_pool_status`.
+Claude calls `proxmox_resize_vm` with `memory_mb=4096, confirm=true`, then
+`proxmox_vm_reboot` with `confirm=true`.
 
-**Snapshot before upgrade:** *"Snapshot CT 200 as `pre-pg17-upgrade`, then
-run `apt list --upgradable` inside it."*
-Claude calls `proxmox_create_snapshot`, then `proxmox_vm_exec` against the
-LXC's SSH alias.
+**Quick backup before a risky upgrade:**
+
+> "Create a snapshot of VM 102 called `pre-upgrade` with description
+> 'before kernel update'."
+
+Claude calls `proxmox_create_snapshot` with `confirm=true`.
+
+**Inspect health:**
+
+> "Are any storages above 80% full?"
+
+Claude calls `proxmox_list_storage` and summarizes.
+
+## Configuration reference
+
+All settings come from environment variables, loaded from `.env`:
+
+| Variable | Default | Description |
+|---|---|---|
+| `PROXMOX_HOST` | — (required) | IP or hostname of the Proxmox host |
+| `PROXMOX_PORT` | `8006` | API port |
+| `PROXMOX_USER` | — (required) | User owning the token (e.g. `root@pam`) |
+| `PROXMOX_TOKEN_NAME` | — (required) | API token ID |
+| `PROXMOX_TOKEN_VALUE` | — (required) | API token secret (UUID) |
+| `PROXMOX_VERIFY_SSL` | `false` | Verify the TLS certificate of the API |
+| `PROXMOX_TIMEOUT` | `30` | HTTP timeout in seconds |
+
+## Security notes
+
+- The token secret sits in `.env`. Restrict that file to your user account
+  (`icacls` on Windows; `chmod 600` on Linux).
+- Never expose the Proxmox API to the internet. Keep it on a trusted
+  LAN/VLAN, or behind a VPN.
+- Privilege-separate the API token. Use a non-root user where possible.
+- Action tools require `confirm=true`. Don't remove that guard.
+- `PROXMOX_VERIFY_SSL=false` is the default because homelab certs are
+  usually self-signed. If you've installed a trusted certificate, set it to
+  `true`.
+
+## Troubleshooting
+
+- **"Authentication failed. Check PROXMOX_TOKEN_VALUE."**
+  The token secret is wrong, or the token user is wrong. The user must match
+  the user the token was created under (e.g. `root@pam`, not just `root`).
+
+- **"Permission denied. Token lacks privileges."**
+  You probably have privilege separation enabled on the token but haven't
+  given the token a role yet. Go to **Datacenter → Permissions** and add an
+  **API Token Permission** for it.
+
+- **"Cannot connect to <host>:8006"**
+  Network problem. Ping the host. Check the firewall on both ends. Confirm
+  the web UI loads at `https://<host>:8006/` from the same machine.
+
+- **"Request timed out after 30s"**
+  Increase `PROXMOX_TIMEOUT` or check that the Proxmox node isn't under
+  heavy load.
+
+- **Tools don't appear in Claude Desktop.**
+  Check `%APPDATA%\Claude\logs\mcp*.log` (Windows) or
+  `~/Library/Logs/Claude/mcp*.log` (macOS) for errors. The most common cause
+  is a wrong path in `claude_desktop_config.json` or backslashes that
+  weren't doubled.
 
 ## Project structure
 
 ```
 proxmox-mcp/
-├── proxmox_mcp.py                  # compatibility shim for old Claude configs
-├── proxmox_mcp/                    # package
-│   ├── __init__.py / __main__.py
-│   ├── server.py                   # FastMCP entry, TOOLS roster
-│   ├── config.py                   # env loading, require_config / require_ssh
-│   ├── http_client.py              # async HTTPX wrappers
-│   ├── mcp_instance.py             # shared FastMCP
-│   ├── models.py                   # shared Pydantic input models
-│   ├── format.py                   # fmt_bytes, status_icon, missing_confirm
-│   ├── ssh.py                      # allow-listed SSH client
-│   ├── host_ssh.py                 # free-shell SSH (host)
-│   ├── vm_ssh.py                   # free-shell SSH (guest VMs, registry)
-│   └── tools/                      # one module per concern
-│       ├── nodes.py vms.py storage.py snapshots.py backups.py
-│       ├── disks.py lvm.py zfs.py
-│       ├── disks_prepare.py lvm_manage.py zfs_manage.py storage_manage.py
-│       ├── ssh_disks.py ssh_zfs.py ssh_zfs_phase3.py
-│       ├── vm_disk.py vm_ssh.py host_ssh.py
-│       └── __init__.py
-├── requirements.txt                # mcp, httpx, pydantic, python-dotenv, asyncssh
-├── .env.example                    # template for .env
-├── .gitignore                      # excludes .env, vm_ssh_hosts.json, _*.{py,txt,log}
-├── LICENSE                         # GPL v3
-├── README.md                       # this file
-└── README.tr.md                    # Turkish version
+├── proxmox_mcp.py      # The MCP server
+├── requirements.txt    # Python dependencies
+├── .env.example        # Template for your local .env
+├── .gitignore
+├── LICENSE             # GPL v3
+├── README.md           # This file
+└── README.tr.md        # Turkish version
 ```
-
-## Troubleshooting
-
-- **`Authentication failed. Check PROXMOX_TOKEN_VALUE.`** — wrong secret or
-  wrong user (must include the realm, e.g. `root@pam`).
-- **`Permission denied. Token lacks privileges.`** — add an API Token
-  Permission with the right role and `Propagate=checked`.
-- **`wipedisk` / `initgpt` rejected with `user != root@pam`** — a Proxmox
-  REST quirk for API tokens. Use the SSH-backed equivalents
-  (`proxmox_ssh_wipe_disk`, `proxmox_ssh_init_gpt`) instead.
-- **`Binary 'X' is not in the SSH allow-list.`** — by design. Use
-  `proxmox_host_exec` if you need to run something outside the allow-list.
-- **Tools don't appear in Claude Desktop.** — check
-  `%APPDATA%\Claude\logs\mcp*.log` (Windows) or `~/Library/Logs/Claude/`
-  (macOS) for import errors. Common cause: wrong path or unescaped
-  backslashes in `claude_desktop_config.json`.
 
 ## Contributing
 
-Issues and PRs welcome. When adding a tool:
+Issues and PRs welcome. If you add a tool, please:
 
-1. Match the existing module pattern: a Pydantic input model with
-   `model_config = ConfigDict(extra="forbid")`, the `@mcp.tool` decorator
-   with annotations, and a `require_config()` (or `require_ssh()`) guard.
-2. Tag destructive tools with `destructiveHint: True` and require
-   `confirm=True` in the input model. Add `i_understand_data_loss=True`
-   to anything irreversible.
-3. Register the tool name in `proxmox_mcp/server.py`'s `TOOLS` list and
-   add the module to `proxmox_mcp/tools/__init__.py`.
-4. Keep this README's tool table in sync.
+1. Follow the existing pattern: pydantic input model + `_require_config` +
+   error handling.
+2. Tag destructive tools with `destructiveHint: True` in the annotations and
+   require `confirm=True` in the input model.
+3. Update the tool list in this README.
 
 ## License
 
-[GNU General Public License v3.0](./LICENSE) — see `LICENSE` for the full text.
+[GNU General Public License v3.0](./LICENSE) — see the `LICENSE` file for the
+full text.

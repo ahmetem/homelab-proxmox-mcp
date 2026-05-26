@@ -1,189 +1,187 @@
 # Proxmox MCP Sunucusu
 
-Claude Desktop'ın (veya MCP destekli herhangi bir istemcinin) bir **Proxmox VE**
-kümesini baştan sona yönetmesini sağlayan yerel bir
-[MCP (Model Context Protocol)](https://modelcontextprotocol.io/) sunucusu —
-VM listelemekten ZFS havuzu oluşturmaya, snapshot replikasyonuna ve host ya da
-misafir VM üzerinde ad-hoc komut çalıştırmaya kadar.
+Claude Desktop'ın (veya MCP destekli herhangi bir istemcinin) bir
+**Proxmox VE** kümesini, token kimlik doğrulamasıyla REST API üzerinden
+yönetmesini sağlayan yerel bir [MCP (Model Context Protocol)](https://modelcontextprotocol.io/)
+sunucusu.
 
 Tek-node bir kurulumda **Proxmox VE 9.1.9** ile test edilmiştir. Çok-node
 kümelerde de çalışır — her araç bir `node` parametresi alır.
 
 > 🇬🇧 English README: [README.md](./README.md)
 
-## İçeriği
+## Özellikler
 
-**5 fazda 52 araç**, küçük bir Python paketi (`proxmox_mcp/`) içinde, her konu
-ayırı modülde. Varsayılan ulaşım token tabanlı REST; SSH isteğe bağlı ve
-yalnızca gerektiği durumlarda devreye girer.
+Paket dokuz faz içinde 55 araç sunar. Çekirdek/"Phase 0" yüzeyi (15 araç)
+aşağıda kategoriye göre özetlenmiştir; disk hazırlama, LVM, ZFS, guest
+SSH, host SSH, LXC exec ve bulk snapshot temizleme için ileri seviye
+araçlar da kayıtlıdır — tam liste için `python proxmox_mcp.py --help`
+çalıştır.
 
-### Faz 0 — küme, VM, snapshot, yedek (16 araç)
+### Salt-okunur (otomatik çağrı güvenli)
 
-| Araç | Amaç |
+| Araç | Açıklama |
 |---|---|
-| `proxmox_list_nodes` / `proxmox_get_node_status` | Küme node'ları, CPU/RAM/uptime |
-| `proxmox_list_vms` / `proxmox_get_vm_status` | VM ve LXC envanteri + detay |
-| `proxmox_vm_start` / `vm_shutdown` / `vm_stop` / `vm_reboot` | Güç işlemleri |
-| `proxmox_resize_vm` | RAM / CPU yeniden boyutlandırma |
-| `proxmox_list_snapshots` / `create_snapshot` / `rollback_snapshot` / `delete_snapshot` | Snapshot yaşam döngüsü |
-| `proxmox_list_backups` / `proxmox_create_backup` | Yedekler (vzdump) |
-| `proxmox_list_storage` | Node bazında storage kullanımı |
+| `proxmox_list_nodes` | Kümedeki tüm node'ları durum, uptime, CPU ve RAM ile listeler |
+| `proxmox_get_node_status` | Tek node için ayrıntılı durum: CPU modeli, kernel, load avg, disk, swap |
+| `proxmox_list_vms` | Kümedeki tüm VM ve LXC container'ları listeler |
+| `proxmox_get_vm_status` | Belirli bir VM/CT için ayrıntılı runtime metrikleri |
+| `proxmox_list_storage` | Node üzerindeki storage pool'lar ve kullanım bilgisi |
+| `proxmox_list_backups` | Bir storage'daki yedek dosyaları |
+| `proxmox_list_snapshots` | Belirli bir VM/CT'nin snapshot'ları |
 
-### Faz 1 — salt-okunur envanter (6 araç)
+### Güç eylemleri (`confirm=true` gerektirir)
 
-| Araç | Amaç |
+| Araç | Açıklama |
 |---|---|
-| `proxmox_list_disks` / `proxmox_get_disk_smart` | Blok cihazlar + SMART (HDD/SSD/NVMe) |
-| `proxmox_list_lvm` / `proxmox_list_lvm_thin` | VG, PV, LV, thin pool'lar |
-| `proxmox_list_zfs` / `proxmox_get_zfs_pool` | ZFS havuzları, vdev ağacı + hata sayacı |
+| `proxmox_vm_start` | VM veya LXC container başlatır |
+| `proxmox_vm_shutdown` | Düzgün (ACPI) kapatma |
+| `proxmox_vm_stop` | Zorla durdurma (fişi çekme) — veri kaybına yol açabilir |
+| `proxmox_vm_reboot` | Önce graceful, sonra gerekirse power-cycle ile yeniden başlatma |
 
-### Faz 2 — disk hazırlık + pool yaşam döngüsü + cluster storage (12 araç)
+### Snapshot ve yedekleme (`confirm=true` gerektirir)
 
-| Araç | Amaç |
+| Araç | Açıklama |
 |---|---|
-| `proxmox_disk_init_gpt` / `proxmox_wipe_disk` | GPT init / wipefs (REST) |
-| `proxmox_create_lvm_vg` / `proxmox_destroy_lvm_vg` | LVM VG yaşam döngüsü |
-| `proxmox_create_lvm_thin` / `proxmox_destroy_lvm_thin` | LVM-thin pool yaşam döngüsü |
-| `proxmox_create_zfs_pool` / `proxmox_destroy_zfs_pool` | ZFS pool yaşam döngüsü |
-| `proxmox_list_cluster_storage` | `/etc/pve/storage.cfg` görünümü |
-| `proxmox_add_zfs_storage` / `add_dir_storage` / `remove_storage` | Storage entry yönetimi |
+| `proxmox_create_snapshot` | VM/CT için snapshot oluşturur |
+| `proxmox_rollback_snapshot` | Snapshot'a dönüş — sonraki veriler kaybolur |
+| `proxmox_create_backup` | Seçilebilir mod ve sıkıştırma ile yedek oluşturur |
+| `proxmox_restore_backup` | Bir yedek arşivinden VM/CT geri yükler. Mevcut VMID'nin üzerine yazılması `force=true` ve `i_understand_data_loss=true` olmadıkça reddedilir. |
 
-### Faz 2.5 — SSH-tabanlı dataset / property / snapshot (7 araç)
+### Yapılandırma (`confirm=true` gerektirir)
 
-Proxmox REST `wipedisk`/`initgpt`'i API token ile reddediyor ve `zfs create`/
-`destroy`/`set`/`snapshot`'ı keyfi dataset'ler için expose etmiyor. Bu araçlar
-allow-listli bir SSH istemcisi üzerinden bu boşluğu doldurur.
-
-| Araç | Amaç |
+| Araç | Açıklama |
 |---|---|
-| `proxmox_ssh_wipe_disk` / `proxmox_ssh_init_gpt` | SSH-tabanlı wipe / GPT init |
-| `proxmox_zfs_create_dataset` / `proxmox_zfs_destroy_dataset` | Dataset CRUD |
-| `proxmox_zfs_set_property` | Allow-listli property set (compression, atime, recordsize, …) |
-| `proxmox_zfs_create_snapshot` | `zfs snapshot [-r] ds@name` |
-| `proxmox_zfs_list_datasets` | Opsiyonel pool scope / snapshot dahil etme |
+| `proxmox_resize_vm` | VM/CT'nin RAM (`memory_mb`) ve/veya CPU `cores` değerini değiştirir |
 
-### Faz 3 — VM disk + ZFS read / scrub / send (7 araç)
+### Guest exec (Phase 4 / 6 — full shell, audit-logged)
 
-| Araç | Amaç |
+| Araç | Açıklama |
 |---|---|
-| `proxmox_move_disk` | Canlı disk migrasyonu QEMU / LXC |
-| `proxmox_clone_vm` | Linked veya full clone, snapshot'tan opsiyonel |
-| `proxmox_list_isos` | ISO envanteri |
-| `proxmox_zfs_get_property` | Tek property veya hepsi |
-| `proxmox_zfs_pool_status` | `zpool status [-v]` + sağlık satırı |
-| `proxmox_zfs_scrub` | Scrub başlat / durdur |
-| `proxmox_zfs_send` | `zfs send → dosya` veya `zfs send \| zfs recv` (replikasyon, raw, incremental) |
+| `proxmox_vm_exec` | Kayıtlı bir guest VM'de SSH üzerinden shell komutu çalıştırır (`vm_ssh_hosts.json` kullanır). `confirm=true` gerektirir. |
+| `proxmox_lxc_exec` | Proxmox host'tan `pct exec` ile bir LXC container içinde shell komutu çalıştırır. CT içinde SSH gerektirmez. `confirm=true` gerektirir. |
 
-### Faz 4 — misafir VM shell exec (3 araç)
+### Toplu ZFS bakımı (Phase 2.5 — SSH tabanlı)
 
-| Araç | Amaç |
+| Araç | Açıklama |
 |---|---|
-| `proxmox_vm_list_hosts` | `vm_ssh_hosts.json`'daki alias'ları göster |
-| `proxmox_vm_exec` | Kayıtlı VM alias'ı üzerinde tam shell komutu (audit-loglu) |
-| `proxmox_vm_read_file` | Config/log dosyaları için `head -c` wrapper'ı |
+| `proxmox_zfs_destroy_snapshots_by_pattern` | Glob pattern'ine uyan ZFS snapshot'larını toplu siler. İki aşamalı: `dry_run=true` (varsayılan) eşleşmeleri listeler; `dry_run=false` + `confirm=true` + `i_understand_data_loss=true` ile gerçek silme yapılır. `max_delete` (varsayılan 1000) ile sınırlanmıştır. |
 
-### Faz 5 — Proxmox host shell exec (1 araç)
+### Güvenlik
 
-| Araç | Amaç |
-|---|---|
-| `proxmox_host_exec` | Proxmox host üzerinde tam shell komutu (audit-loglu) |
-
-## Güvenlik modeli
-
-1. **Her write `confirm=true` ister.** Salt-okunur araçlarda koruma yok.
-2. **Yıkıcı işlemler ek olarak `i_understand_data_loss=true` ister.** Bu
-   wipe, destroy pool/VG, recursive zfs destroy, delete_snapshot ve
-   `vm_exec`/`host_exec`'te komut destructive regex pattern eşleştiğinde
-   uygulanır (`rm -rf`, `mkfs`, `dd of=/dev/`, `shutdown`, fork bombu,
-   `zpool destroy`, `qm destroy`, vb.).
-3. **SSH allow-list.** Faz 2.5 ve 3 SSH-tabanlı araçlar yalnızca sabit bir
-   binary listesini çalıştırır (`wipefs`, `sgdisk`, `blkdiscard`, `dd`,
-   `zfs`, `zpool`, LVM araçları, `lsblk`, `nvme`, `smartctl`). Her argüman
-   gönderim öncesi `shlex.quote`'lanır.
-4. **Serbest shell exec audit-logludur.** `proxmox_vm_exec` ve
-   `proxmox_host_exec` her çağrıyı (alias, rc, komut, stdout/stderr ön
-   izleme) paket yanındaki `_vm_ssh_audit.log` / `_host_ssh_audit.log`
-   dosyalarına yazar.
+Yıkıcı veya durum değiştiren tüm eylemler `confirm=true` gerektirir.
+Kalıcı veri silen araçlar (snapshot delete, üzerine yazma ile backup
+restore, bulk snapshot destroy, ZFS dataset destroy vb.) ek olarak
+`i_understand_data_loss=true` gerektirir. Ajanın iki bayrağı da açıkça
+geçmesi gerekir — pratikte bu, Claude'un bu araçları yalnızca kullanıcı
+eylemi açıkça istediğinde çağırması anlamına gelir. Salt-okunur araçlarda
+böyle bir koruma yoktur.
 
 ## Gereksinimler
 
 - **Python 3.11+**
-- HTTPS üzerinden (varsayılan port 8006) erişilebilir bir Proxmox VE host
-- Proxmox **API token** (aşağıda)
-- Opsiyonel: Faz 2.5+ araçları için host'a yetkilendirilmiş SSH key
+- HTTPS üzerinden (varsayılan port 8006) erişilebilen bir Proxmox VE host
+- Doğru yetkilere sahip bir Proxmox **API token**'ı (aşağıda anlatılıyor)
 - Claude Desktop (veya herhangi bir MCP istemcisi)
 
-## 1. Proxmox API token oluştur
+## 1. Proxmox API token'ı oluştur
 
-1. Web UI → **Datacenter → Permissions → API Tokens → Add**
-   - **User**: `root@pam` (veya ayrı kullanıcı)
-   - **Token ID**: `mcp-server`
-   - **Privilege Separation**: açık bırak
-2. **Secret** değerini (UUID) hemen kopyala — bir daha görünmez.
-3. Token'a rol ver: **Datacenter → Permissions → Add → API Token Permission**
-   - **Path**: `/` (veya daha dar)
-   - **Role**: `PVEAdmin` (tam) veya `PVEVMAdmin` (sadece VM/CT)
-   - **Propagate**: işaretli
+Sunucu, root parolasıyla değil API token'ı ile kimlik doğrular. Token'lar
+tek tek iptal edilebilir ve etki alanını sınırlar.
 
-## 2. Kurulum
+1. Proxmox web arayüzüne giriş yap.
+2. **Datacenter → Permissions → API Tokens**'a git.
+3. **Add**'e tıkla:
+   - **User**: `root@pam` (veya tercihen ayrı bir kullanıcı)
+   - **Token ID**: `mcp-server` (istediğin bir isim)
+   - **Privilege Separation**: aksini istemiyorsan açık bırak
+4. **Add**'e bas. Açılan pencere **secret** değerini (bir UUID) **bir kez**
+   gösterir. Hemen kopyala — bir daha alamazsın.
 
-```bash
-git clone https://github.com/ahmetem/proxmox-mcp.git ~/mcp-servers/proxmox-mcp
-cd ~/mcp-servers/proxmox-mcp
-python3 -m venv .venv
-source .venv/bin/activate         # Windows: .\.venv\Scripts\Activate.ps1
+Privilege Separation açıksa token'a ayrıca yetki vermen gerekir.
+**Datacenter → Permissions → Add → API Token Permission**:
+
+- **Path**: `/` (veya daha dar)
+- **API Token**: az önce oluşturduğun token
+- **Role**: tam erişim için `PVEAdmin`, yalnızca VM/CT yönetimi için
+  `PVEVMAdmin`
+- **Propagate**: işaretli
+
+Üretimde bunu çok daha dar kapsamlı yapabilirsin. Homelab için `/` +
+`PVEAdmin` en basit yoldur.
+
+## 2. Sunucuyu kur
+
+### Windows (PowerShell)
+
+```powershell
+git clone https://github.com/<kullanici-adin>/proxmox-mcp.git C:\mcp-servers\proxmox-mcp
+cd C:\mcp-servers\proxmox-mcp
+
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 ```
 
-## 3. `.env` yapılandır
+PowerShell aktivasyon script'ini engelliyorsa, yönetici olarak açtığın bir
+PowerShell'de bir defa şunu çalıştır:
+
+```powershell
+Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned
+```
+
+### Linux / macOS
+
+```bash
+git clone https://github.com/<kullanici-adin>/proxmox-mcp.git ~/mcp-servers/proxmox-mcp
+cd ~/mcp-servers/proxmox-mcp
+
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+## 3. `.env` dosyasını yapılandır
+
+```powershell
+copy .env.example .env
+notepad .env
+```
+
+Doldur:
 
 ```ini
-PROXMOX_HOST=192.168.1.10
-PROXMOX_PORT=8006
-PROXMOX_USER=root@pam
-PROXMOX_TOKEN_NAME=mcp-server
-PROXMOX_TOKEN_VALUE=xxxxxxxx-xxxx-...
-PROXMOX_VERIFY_SSL=false
+PROXMOX_HOST=192.168.1.10            # Proxmox host'unun IP'si veya hostname'i
+PROXMOX_PORT=8006                    # varsayılan
+PROXMOX_USER=root@pam                # token'ın ait olduğu kullanıcı
+PROXMOX_TOKEN_NAME=mcp-server        # seçtiğin Token ID
+PROXMOX_TOKEN_VALUE=xxxxxxxx-xxxx-...  # gizli UUID
+PROXMOX_VERIFY_SSL=false             # çoğu homelab self-signed kullanır
 PROXMOX_TIMEOUT=30
-
-# Opsiyonel: yalnızca Faz 2.5+ SSH araçları ve vm/host exec için gerekir.
-PROXMOX_SSH_HOST=                # boşsa PROXMOX_HOST kullanılır
-PROXMOX_SSH_PORT=22
-PROXMOX_SSH_USER=root
-PROXMOX_SSH_KEY_PATH=/home/sen/.ssh/proxmox_ed25519
-PROXMOX_SSH_KNOWN_HOSTS=         # known_hosts dosyası; güvenli LAN'da "ignore"
-PROXMOX_SSH_PASSWORD=            # key yoksa fallback
-PROXMOX_SSH_TIMEOUT=30
 ```
 
-## 4. Opsiyonel: misafir VM SSH registry'si
+`.env` dosyasını **asla** git'e commit etme. `.gitignore` zaten hariç tutar.
 
-`proxmox_vm_exec` / `proxmox_vm_read_file` misafir VM'lerde komut
-çalıştırmak için alias kullanır. `.env` yanında `vm_ssh_hosts.json` oluştur
-(dosya gitignore'da):
+## 4. Hızlı test
 
-```json
-{
-  "_comment": "_ ile başlayan key'ler yorum sayılır ve görmezden gelinir.",
-  "dockers": {
-    "host": "192.168.1.20",
-    "port": 22,
-    "user": "ahmet",
-    "key_path": "/home/sen/.ssh/vm_dockers_ed25519",
-    "known_hosts": "ignore",
-    "description": "Docker host VM 102"
-  }
-}
+venv aktifken:
+
+```powershell
+python proxmox_mcp.py --help
 ```
 
-Claude `alias="dockers"`'ı buradaki kayda çözer. `known_hosts` bir dosya yolu
-veya güvenli ağlarda `"ignore"` olabilir.
+Araç listesini görüp temiz çıkmalı. Burada import hatası alıyorsan bir
+bağımlılık doğru yüklenmemiş demektir.
 
 ## 5. Claude Desktop'a kaydet
 
-`claude_desktop_config.json` (Windows: `%APPDATA%\Claude\`,
-macOS: `~/Library/Application Support/Claude/`,
-Linux: `~/.config/Claude/`):
+Claude Desktop'ın config dosyasını aç:
+
+- **Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
+- **macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
+- **Linux**: `~/.config/Claude/claude_desktop_config.json`
+
+Dosya yoksa oluştur. `mcpServers` bloğuna ekle (varsa genişlet):
 
 ```json
 {
@@ -197,85 +195,131 @@ Linux: `~/.config/Claude/`):
 }
 ```
 
-Claude Desktop'ı tamamen kapat (tray → Çıkış) ve yeniden aç.
+Yolları kendi sistemine göre ayarla. Windows'ta JSON içinde ters bölü iki
+katı olmalı (`\\`).
+
+Claude Desktop'ı tamamen kapat (tray ikonu → Çıkış) ve yeniden aç. Yeni bir
+sohbette Proxmox araçları çekiç/connector ikonunda görünür.
+
+## Sohbetteki ilk test
+
+Salt-okunur bir çağrıyla başla:
+
+> "Proxmox node'larımı listele."
+
+Claude `proxmox_list_nodes`'u çağırır ve node'ların listesini gösterir.
+Kimlik doğrulama hatası alırsan `PROXMOX_TOKEN_VALUE`'yi ve token'ın
+yetkilerini tekrar kontrol et.
+
+Sonra dene:
+
+> "Tüm VM'leri göster."
+>
+> "VM 101'in durumu ne?"
+>
+> "pve node'unun local storage'ındaki yedekleri listele."
+
+Salt-okunur araçların düzgün çalıştığından emin olduğunda eylem araçlarını
+deneyebilirsin:
+
+> "VM 101'i yeniden başlat."
+
+Claude onay isteyecek. Onayladıktan sonra `proxmox_vm_reboot`'u
+`confirm=true` ile çağırır.
 
 ## Örnek senaryolar
 
-**Sağlık kontrolü:** *"Node durumunu ve %80 üstündeki storage'ı göster."*
-Claude `proxmox_list_nodes`, `proxmox_list_storage`'ı çağırır, özetler.
+**VM'i yeniden boyutlandır ve restart et:**
 
-**VM diskini taşı:** *"VM 102'nin scsi0'ını vmdata'dan nvmepool'a taşı,
-orijinali unused olarak bırak."*
-Claude `proxmox_move_disk` çağırır: `delete_source=false, confirm=true`.
+> "VM 101'i 4 GB RAM'e ayarla, sonra yeniden başlat."
 
-**ZFS bakımı:** *"nvmepool için scrub başlat, sonra zpool status göster."*
-Claude `proxmox_zfs_scrub` ve sonrasında `proxmox_zfs_pool_status` çağırır.
+Claude `proxmox_resize_vm`'i `memory_mb=4096, confirm=true` ile, sonra
+`proxmox_vm_reboot`'u `confirm=true` ile çağırır.
 
-**Upgrade öncesi snapshot:** *"CT 200 için `pre-pg17-upgrade` snapshot al,
-sonra içeride `apt list --upgradable` çalıştır."*
-Claude `proxmox_create_snapshot`, sonra LXC alias'ına `proxmox_vm_exec`
-çağırır.
+**Riskli güncelleme öncesi hızlı snapshot:**
+
+> "VM 102 için `pre-upgrade` adında snapshot oluştur, açıklaması
+> 'kernel güncellemesi öncesi'."
+
+Claude `proxmox_create_snapshot`'u `confirm=true` ile çağırır.
+
+**Sağlık kontrolü:**
+
+> "%80'in üzerinde dolu storage var mı?"
+
+Claude `proxmox_list_storage`'ı çağırır ve özetler.
+
+## Yapılandırma referansı
+
+Tüm ayarlar `.env`'den okunan ortam değişkenlerinden gelir:
+
+| Değişken | Varsayılan | Açıklama |
+|---|---|---|
+| `PROXMOX_HOST` | — (zorunlu) | Proxmox host'unun IP veya hostname'i |
+| `PROXMOX_PORT` | `8006` | API portu |
+| `PROXMOX_USER` | — (zorunlu) | Token sahibi kullanıcı (örn. `root@pam`) |
+| `PROXMOX_TOKEN_NAME` | — (zorunlu) | API token ID |
+| `PROXMOX_TOKEN_VALUE` | — (zorunlu) | API token secret (UUID) |
+| `PROXMOX_VERIFY_SSL` | `false` | API'nin TLS sertifikasını doğrula |
+| `PROXMOX_TIMEOUT` | `30` | HTTP timeout (saniye) |
+
+## Güvenlik notları
+
+- Token secret'ı `.env`'de duruyor. Bu dosyayı yalnızca kendi kullanıcına
+  okunabilir yap (Windows'ta `icacls`, Linux'ta `chmod 600`).
+- Proxmox API'sini asla internete açma. Güvenilir bir LAN/VLAN'da veya
+  VPN arkasında tut.
+- Token'ı privilege-separated tut. Mümkünse root olmayan kullanıcı kullan.
+- Eylem araçları `confirm=true` gerektirir. Bu korumayı kaldırma.
+- Varsayılan `PROXMOX_VERIFY_SSL=false`, çünkü homelab sertifikaları
+  genellikle self-signed olur. Güvenilir bir sertifika kurduysan `true` yap.
+
+## Sorun giderme
+
+- **"Authentication failed. Check PROXMOX_TOKEN_VALUE."**
+  Token secret yanlış veya kullanıcı yanlış. Kullanıcı, token'ın
+  oluşturulduğu kullanıcı ile eşleşmeli (örn. sadece `root` değil
+  `root@pam`).
+
+- **"Permission denied. Token lacks privileges."**
+  Privilege separation açık ama token'a rol vermemiş olabilirsin.
+  **Datacenter → Permissions**'a git ve bir **API Token Permission** ekle.
+
+- **"Cannot connect to <host>:8006"**
+  Ağ sorunu. Host'a ping at. İki taraftaki firewall'u kontrol et. Aynı
+  makineden `https://<host>:8006/` adresinin açıldığını doğrula.
+
+- **"Request timed out after 30s"**
+  `PROXMOX_TIMEOUT`'u artır veya Proxmox node'unun aşırı yüklü olmadığını
+  kontrol et.
+
+- **Araçlar Claude Desktop'ta görünmüyor.**
+  Hatalar için `%APPDATA%\Claude\logs\mcp*.log` (Windows) veya
+  `~/Library/Logs/Claude/mcp*.log` (macOS) loglarına bak. En sık neden
+  `claude_desktop_config.json`'da yanlış yol veya çiftlenmemiş ters bölü.
 
 ## Proje yapısı
 
 ```
 proxmox-mcp/
-├── proxmox_mcp.py                  # eski Claude config'leri için shim
-├── proxmox_mcp/                    # paket
-│   ├── __init__.py / __main__.py
-│   ├── server.py                   # FastMCP entry, TOOLS listesi
-│   ├── config.py                   # env yükleme, require_config / require_ssh
-│   ├── http_client.py              # async HTTPX wrapper'ları
-│   ├── mcp_instance.py             # paylaşılan FastMCP
-│   ├── models.py                   # paylaşılan Pydantic input modelleri
-│   ├── format.py                   # fmt_bytes, status_icon, missing_confirm
-│   ├── ssh.py                      # allow-listli SSH istemcisi
-│   ├── host_ssh.py                 # serbest shell SSH (host)
-│   ├── vm_ssh.py                   # serbest shell SSH (VM, registry)
-│   └── tools/                      # her konu için ayrı modül
-│       ├── nodes.py vms.py storage.py snapshots.py backups.py
-│       ├── disks.py lvm.py zfs.py
-│       ├── disks_prepare.py lvm_manage.py zfs_manage.py storage_manage.py
-│       ├── ssh_disks.py ssh_zfs.py ssh_zfs_phase3.py
-│       ├── vm_disk.py vm_ssh.py host_ssh.py
-│       └── __init__.py
-├── requirements.txt                # mcp, httpx, pydantic, python-dotenv, asyncssh
-├── .env.example                    # .env şablonu
-├── .gitignore                      # .env, vm_ssh_hosts.json, _*.{py,txt,log}
-├── LICENSE                         # GPL v3
-├── README.md                       # İngilizce sürüm
-└── README.tr.md                    # bu dosya
+├── proxmox_mcp.py      # MCP sunucusu
+├── requirements.txt    # Python bağımlılıkları
+├── .env.example        # Yerel .env için şablon
+├── .gitignore
+├── LICENSE             # GPL v3
+├── README.md           # İngilizce sürüm
+└── README.tr.md        # Bu dosya
 ```
-
-## Sorun giderme
-
-- **`Authentication failed. Check PROXMOX_TOKEN_VALUE.`** — secret yanlış
-  veya kullanıcı yanlış (realm dahil olmalı, örn. `root@pam`).
-- **`Permission denied. Token lacks privileges.`** — token'a uygun rolde bir
-  API Token Permission ekle, `Propagate=checked`.
-- **`wipedisk` / `initgpt` `user != root@pam` ile reddediliyor** — API
-  token için bilinen Proxmox REST kısıtlaması. SSH eşdeğerlerini kullan
-  (`proxmox_ssh_wipe_disk`, `proxmox_ssh_init_gpt`).
-- **`Binary 'X' is not in the SSH allow-list.`** — tasarım gereği. Allow-list
-  dışındaki bir şey için `proxmox_host_exec` kullan.
-- **Araçlar Claude Desktop'ta görünmüyor.** — `%APPDATA%\Claude\logs\mcp*.log`
-  (Windows) veya `~/Library/Logs/Claude/` (macOS) loglarına bak. En sık
-  neden: `claude_desktop_config.json`'da yanlış yol veya çiftlenmemiş ters
-  bölü.
 
 ## Katkı
 
-Issue ve PR'lar açık. Bir araç eklerken:
+Issue ve PR'lara açık. Bir araç eklersen lütfen:
 
-1. Mevcut modül desenini takip et: `ConfigDict(extra="forbid")` ile bir
-   Pydantic input model, annotations'lı `@mcp.tool` dekoratörü, ve
-   `require_config()` (veya `require_ssh()`) koruyucusu.
-2. Yıkıcı araçları `destructiveHint: True` ile işaretle ve input modelinde
-   `confirm=True` zorunlu kıl. Geri dönüşsüz şeylere
-   `i_understand_data_loss=True` ekle.
-3. Araç adını `proxmox_mcp/server.py`'ın `TOOLS` listesine ekle ve modülü
-   `proxmox_mcp/tools/__init__.py`'a kaydet.
-4. Bu README'deki araç tablosunu güncel tut.
+1. Mevcut deseni takip et: pydantic input modeli + `_require_config` +
+   hata yönetimi.
+2. Yıkıcı araçları annotations'ta `destructiveHint: True` ile işaretle ve
+   input modelinde `confirm=True` zorunlu kıl.
+3. Bu README'deki araç listesini güncelle.
 
 ## Lisans
 
