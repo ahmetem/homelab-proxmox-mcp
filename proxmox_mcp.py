@@ -4,10 +4,6 @@ old single-file entry point ``proxmox_mcp.py``.
 The implementation now lives in the ``proxmox_mcp`` package. This file just
 re-runs the package's main(), so existing MCP client configs keep working
 without changes.
-
-Old git history of the previous monolithic file is preserved in version
-control; the previous content is also kept as ``proxmox_mcp_legacy.py`` next
-to this file for quick reference.
 """
 from __future__ import annotations
 

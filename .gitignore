@@ -8,12 +8,13 @@ vm_ssh_hosts.json
 _vm_ssh_audit.log
 _host_ssh_audit.log
 
-# Ad-hoc test / probe scripts
-_vm102_*
-_smoke*.txt
-_smoke*_err.txt
-_sleep.txt
-_livetest*
+# Root-level ad-hoc test / probe scripts and their outputs.
+# Anything matching /_*.{py,txt,log} in the repo root is treated as
+# scratch space and not committed. Package files under proxmox_mcp/
+# starting with __ (dunder) are unaffected.
+/_*.py
+/_*.txt
+/_*.log
 
 # Python
 __pycache__/
