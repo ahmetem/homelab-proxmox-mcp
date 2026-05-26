@@ -78,7 +78,7 @@ async def proxmox_list_snapshots(params: VMInput) -> str:
     for s in snaps:
         name = s.get("name", "?")
         if name == "current":
-            lines.append(f"- \ud83d\udccd **current** — _you are here_")
+            lines.append(f"- \U0001F4CD **current** — _you are here_")
             continue
         snaptime = s.get("snaptime", 0)
         try:
@@ -86,7 +86,7 @@ async def proxmox_list_snapshots(params: VMInput) -> str:
         except Exception:
             ts = "?"
         desc = s.get("description", "").strip()
-        lines.append(f"- \ud83d\udcf8 **{name}** — {ts}" + (f"  \n  {desc}" if desc else ""))
+        lines.append(f"- \U0001F4F8 **{name}** — {ts}" + (f"  \n  {desc}" if desc else ""))
     return "\n".join(lines)
 
 

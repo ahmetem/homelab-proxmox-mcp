@@ -56,7 +56,6 @@ async def proxmox_list_lvm(params: NodeInput) -> str:
     if params.response_format == ResponseFormat.JSON:
         return json.dumps(data, indent=2, default=str)
 
-    # Proxmox returns either {"children": [...], "leaf": 0} (tree form) or a list.
     children = data.get("children") if isinstance(data, dict) else data
     if not children:
         return f"_No LVM volume groups on `{params.node}`._"
