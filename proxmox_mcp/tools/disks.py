@@ -152,7 +152,6 @@ async def proxmox_list_disks(params: DiskListInput) -> str:
         used = _used_label(d)
         health_raw = d.get("health") or d.get("wearout")
         if isinstance(health_raw, (int, float)) and 0 <= health_raw <= 100:
-            # wearout: 0 = new, higher = more worn. Proxmox sometimes inverts.
             health_str = f"wearout {health_raw}%"
             icon = health_icon("PASSED") if health_raw < 80 else health_icon("WARNING")
         else:
