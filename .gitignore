@@ -3,6 +3,18 @@
 .env.local
 *.env
 
+# Local config with hostnames/users (sensitive but not secret)
+vm_ssh_hosts.json
+_vm_ssh_audit.log
+_host_ssh_audit.log
+
+# Ad-hoc test / probe scripts
+_vm102_*
+_smoke*.txt
+_smoke*_err.txt
+_sleep.txt
+_livetest*
+
 # Python
 __pycache__/
 *.py[cod]
