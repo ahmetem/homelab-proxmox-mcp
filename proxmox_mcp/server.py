@@ -43,6 +43,7 @@ TOOLS = [
     # Backups
     "proxmox_list_backups",
     "proxmox_create_backup",
+    "proxmox_restore_backup",
     # Storage (pool listing)
     "proxmox_list_storage",
     # Phase 1: disks / LVM / ZFS inventory
@@ -76,6 +77,7 @@ TOOLS = [
     "proxmox_zfs_set_property",
     "proxmox_zfs_create_snapshot",
     "proxmox_zfs_list_datasets",
+    "proxmox_zfs_destroy_snapshots_by_pattern",
     # Phase 3: VM disk movement / clone / ISO listing
     "proxmox_move_disk",
     "proxmox_clone_vm",
@@ -91,6 +93,8 @@ TOOLS = [
     "proxmox_vm_read_file",
     # Phase 5: Proxmox host SSH (full shell exec, audit-logged)
     "proxmox_host_exec",
+    # Phase 6: LXC container exec via pct exec (typed wrapper on host SSH)
+    "proxmox_lxc_exec",
 ]
 
 
