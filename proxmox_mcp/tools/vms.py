@@ -50,7 +50,7 @@ async def proxmox_list_vms(params: FormatInput) -> str:
     lines = ["## Virtual Machines and Containers", ""]
     for v in sorted(vms, key=lambda x: x.get("vmid", 0)):
         icon = status_icon(v.get("status", "?"))
-        vmtype = "\ud83d\udce6 LXC" if v.get("type") == "lxc" else "\ud83d\udcbb VM"
+        vmtype = "\U0001F4E6 LXC" if v.get("type") == "lxc" else "\U0001F4BB VM"
         name = v.get("name", "?")
         vmid = v.get("vmid", "?")
         node = v.get("node", "?")

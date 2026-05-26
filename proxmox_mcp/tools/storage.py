@@ -45,7 +45,7 @@ async def proxmox_list_storage(params: NodeInput) -> str:
         used = s.get("used", 0)
         total = s.get("total", 0)
         pct = (used / total * 100) if total else 0
-        active = "\ud83d\udfe2" if s.get("active") else "\ud83d\udd34"
+        active = "\U0001F7E2" if s.get("active") else "\U0001F534"
         lines.append(
             f"- {active} **{s.get('storage')}** ({s.get('type')}) — "
             f"{fmt_bytes(used)}/{fmt_bytes(total)} ({pct:.0f}%) — "
