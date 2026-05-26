@@ -40,23 +40,23 @@ def fmt_uptime(secs: Any) -> str:
 
 def status_icon(status: str) -> str:
     return {
-        "running": "\ud83d\udfe2",
-        "online": "\ud83d\udfe2",
-        "stopped": "\ud83d\udd34",
-        "offline": "\ud83d\udd34",
-    }.get(status, "\u26aa")
+        "running": "\U0001F7E2",
+        "online": "\U0001F7E2",
+        "stopped": "\U0001F534",
+        "offline": "\U0001F534",
+    }.get(status, "\u26AA")
 
 
 def health_icon(health: str) -> str:
     """ZFS / SMART health icon."""
     h = (health or "").upper()
     if h in {"ONLINE", "PASSED", "OK"}:
-        return "\ud83d\udfe2"
+        return "\U0001F7E2"
     if h in {"DEGRADED", "WARNING"}:
-        return "\ud83d\udfe1"
+        return "\U0001F7E1"
     if h in {"FAULTED", "FAILED", "OFFLINE", "UNAVAIL"}:
-        return "\ud83d\udd34"
-    return "\u26aa"
+        return "\U0001F534"
+    return "\u26AA"
 
 
 def missing_confirm(action: str) -> str:
