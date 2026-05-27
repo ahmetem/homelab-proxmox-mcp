@@ -12,9 +12,9 @@ kümelerde de çalışır — her araç bir `node` parametresi alır.
 
 ## Özellikler
 
-Paket dokuz faz içinde 55 araç sunar. Çekirdek/"Phase 0" yüzeyi (15 araç)
-aşağıda kategoriye göre özetlenmiştir; disk hazırlama, LVM, ZFS, guest
-SSH, host SSH, LXC exec ve bulk snapshot temizleme için ileri seviye
+Paket dokuz faz içinde 58 araç sunar. Çekirdek/"Phase 0" yüzeyi aşağıda
+kategoriye göre özetlenmiştir; disk hazırlama, LVM, ZFS, guest SSH,
+host SSH, LXC exec ve bulk snapshot temizleme için ileri seviye
 araçlar da kayıtlıdır — tam liste için `python proxmox_mcp.py --help`
 çalıştır.
 
@@ -27,6 +27,7 @@ araçlar da kayıtlıdır — tam liste için `python proxmox_mcp.py --help`
 | `proxmox_list_vms` | Kümedeki tüm VM ve LXC container'ları listeler |
 | `proxmox_get_vm_status` | Belirli bir VM/CT için ayrıntılı runtime metrikleri |
 | `proxmox_list_storage` | Node üzerindeki storage pool'lar ve kullanım bilgisi |
+| `proxmox_storage_usage_detail` | Tek bir storage için tür bazında içerik dökümü: toplam boyutlar + en büyük N item. Kapasite planlaması için (örn. "hangi VM backup storage'ımı yiyor?"). |
 | `proxmox_list_backups` | Bir storage'daki yedek dosyaları |
 | `proxmox_list_snapshots` | Belirli bir VM/CT'nin snapshot'ları |
 
@@ -60,6 +61,8 @@ araçlar da kayıtlıdır — tam liste için `python proxmox_mcp.py --help`
 |---|---|
 | `proxmox_vm_exec` | Kayıtlı bir guest VM'de SSH üzerinden shell komutu çalıştırır (`vm_ssh_hosts.json` kullanır). `confirm=true` gerektirir. |
 | `proxmox_lxc_exec` | Proxmox host'tan `pct exec` ile bir LXC container içinde shell komutu çalıştırır. CT içinde SSH gerektirmez. `confirm=true` gerektirir. |
+| `proxmox_ct_service_action` | `proxmox_lxc_exec` üzerine typed kısayol: bir CT içinde `systemctl --no-pager <action> <service>`. Salt-okunur action'lar (status, is-active, is-enabled, show) `confirm` istemez; durum değiştirenler (start, stop, restart, reload, enable, disable, mask, unmask) `confirm=true` gerektirir. |
+| `proxmox_ct_log_tail` | Bir CT içinden journald unit veya log dosyası tail eden salt-okunur araç. İki mod: `service` (journalctl -u) ve `file` (tail -n). Opsiyonel `grep` server-side filter. |
 
 ### Toplu ZFS bakımı (Phase 2.5 — SSH tabanlı)
 

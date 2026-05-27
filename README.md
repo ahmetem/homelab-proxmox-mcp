@@ -11,9 +11,9 @@ should work — every tool accepts a `node` parameter.
 
 ## Features
 
-The package exposes 55 tools across nine phases. The core/"Phase 0"
-surface (15 tools) is summarised below by category; advanced tools for
-disk preparation, LVM, ZFS, guest SSH, host SSH, LXC exec, and bulk
+The package exposes 58 tools across nine phases. The core/"Phase 0"
+surface is summarised below by category; advanced tools for disk
+preparation, LVM, ZFS, guest SSH, host SSH, LXC exec, and bulk
 snapshot cleanup are also registered — run `python proxmox_mcp.py --help`
 for the full list.
 
@@ -26,6 +26,7 @@ for the full list.
 | `proxmox_list_vms` | List every VM and LXC container across the cluster |
 | `proxmox_get_vm_status` | Detailed runtime metrics for a single VM/CT |
 | `proxmox_list_storage` | Storage pools on a node with usage info |
+| `proxmox_storage_usage_detail` | Per-storage content breakdown: items by type with totals, plus top-N largest items. Useful for capacity planning ("which VM is eating my backup storage?"). |
 | `proxmox_list_backups` | Backup files on a storage |
 | `proxmox_list_snapshots` | Snapshots for a specific VM/CT |
 
@@ -59,6 +60,8 @@ for the full list.
 |---|---|
 | `proxmox_vm_exec` | Run a shell command on a registered guest VM via SSH (uses `vm_ssh_hosts.json`). Requires `confirm=true`. |
 | `proxmox_lxc_exec` | Run a shell command inside an LXC container via `pct exec` from the Proxmox host. No SSH inside the CT needed. Requires `confirm=true`. |
+| `proxmox_ct_service_action` | Typed shortcut on top of `proxmox_lxc_exec`: `systemctl --no-pager <action> <service>` inside a CT. Read-only actions (status, is-active, is-enabled, show) skip `confirm`; state-changing actions (start, stop, restart, reload, enable, disable, mask, unmask) require `confirm=true`. |
+| `proxmox_ct_log_tail` | Read-only tail of a journald unit or log file from inside a CT. Two modes: `service` (journalctl -u) and `file` (tail -n). Optional `grep` server-side filter. |
 
 ### Bulk ZFS maintenance (Phase 2.5 — SSH-backed)
 
