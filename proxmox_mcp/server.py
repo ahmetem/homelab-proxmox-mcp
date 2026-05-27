@@ -46,6 +46,7 @@ TOOLS = [
     "proxmox_restore_backup",
     # Storage (pool listing)
     "proxmox_list_storage",
+    "proxmox_storage_usage_detail",
     # Phase 1: disks / LVM / ZFS inventory
     "proxmox_list_disks",
     "proxmox_get_disk_smart",
@@ -95,6 +96,8 @@ TOOLS = [
     "proxmox_host_exec",
     # Phase 6: LXC container exec via pct exec (typed wrapper on host SSH)
     "proxmox_lxc_exec",
+    "proxmox_ct_service_action",
+    "proxmox_ct_log_tail",
 ]
 
 

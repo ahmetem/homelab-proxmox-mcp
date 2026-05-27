@@ -28,4 +28,5 @@ from proxmox_mcp.tools import (  # noqa: F401
     host_ssh,
     # Phase 6 (LXC container exec via pct exec — typed wrapper on host SSH)
     lxc_exec,
+    ct_ops,
 )
