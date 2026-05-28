@@ -85,9 +85,10 @@ async def proxmox_get_vm_status(params: VMInput) -> str:
     cfg = require_config()
     if cfg:
         return cfg
+    actual_type = await _resolve_vm_type(params.node, params.vmid, hint=params.vm_type)
     try:
         status = await http_client.get(
-            f"/nodes/{params.node}/{params.vm_type}/{params.vmid}/status/current"
+            f"/nodes/{params.node}/{actual_type}/{params.vmid}/status/current"
         )
     except Exception as exc:
         return http_client.format_http_error(exc)
@@ -96,7 +97,7 @@ async def proxmox_get_vm_status(params: VMInput) -> str:
         return json.dumps(status, indent=2, default=str)
 
     icon = status_icon(status.get("status", "?"))
-    vmtype = "LXC Container" if params.vm_type == "lxc" else "QEMU VM"
+    vmtype = "LXC Container" if actual_type == "lxc" else "QEMU VM"
     lines = [
         f"## {icon} {vmtype} {params.vmid} `{status.get('name', '?')}`",
         "",
@@ -119,16 +120,39 @@ async def proxmox_get_vm_status(params: VMInput) -> str:
     return "\n".join(lines)
 
 
+async def _resolve_vm_type(node: str, vmid: int, hint: str = "qemu") -> str:
+    """Detect whether vmid is a 'qemu' VM or an 'lxc' container by querying the
+    cluster resource list. Falls back to `hint` if detection fails, so the
+    result is never worse than the caller-supplied type. This prevents a wrong
+    or defaulted vm_type from misrouting an action (e.g. starting an LXC via
+    the qemu endpoint, which silently no-ops)."""
+    try:
+        resources = await http_client.get("/cluster/resources", params={"type": "vm"})
+        for r in resources or []:
+            if r.get("vmid") == vmid and (not node or r.get("node") == node):
+                t = r.get("type")
+                if t in ("qemu", "lxc"):
+                    return t
+    except Exception:
+        pass
+    return hint if hint in ("qemu", "lxc") else "qemu"
+
+
 async def _vm_action(node: str, vmid: int, vm_type: str, action: str) -> str:
-    """Send a power action to a VM/CT. Returns result message."""
+    """Send a power action to a VM/CT. Auto-detects the guest type from vmid so
+    a wrong/default vm_type cannot misroute the request. Returns result msg."""
+    actual_type = await _resolve_vm_type(node, vmid, hint=vm_type)
     try:
         task_id = await http_client.post(
-            f"/nodes/{node}/{vm_type}/{vmid}/status/{action}"
+            f"/nodes/{node}/{actual_type}/{vmid}/status/{action}"
         )
     except Exception as exc:
         return http_client.format_http_error(exc)
+    note = ""
+    if actual_type != vm_type:
+        note = f" (auto-detected '{actual_type}', given '{vm_type}')"
     return (
-        f"OK: Action '{action}' on {vm_type} {vmid} accepted. "
+        f"OK: Action '{action}' on {actual_type} {vmid} accepted{note}. "
         f"Task ID: {task_id}. "
         "Use proxmox_get_vm_status to confirm new state."
     )
