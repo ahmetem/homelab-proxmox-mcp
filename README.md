@@ -63,11 +63,21 @@ for the full list.
 | `proxmox_ct_service_action` | Typed shortcut on top of `proxmox_lxc_exec`: `systemctl --no-pager <action> <service>` inside a CT. Read-only actions (status, is-active, is-enabled, show) skip `confirm`; state-changing actions (start, stop, restart, reload, enable, disable, mask, unmask) require `confirm=true`. |
 | `proxmox_ct_log_tail` | Read-only tail of a journald unit or log file from inside a CT. Two modes: `service` (journalctl -u) and `file` (tail -n). Optional `grep` server-side filter. |
 
+### Diagnostics & forensics (Phase 7 — read-only)
+
+| Tool | Description |
+|------|-------------|
+| `proxmox_zfs_list_snapshots` | List ZFS snapshots (name, used, referenced, creation) directly via SSH, **including** transient `@vzdump` scratch snapshots the PVE config-snapshot API never reports. Filter by `dataset` and/or `contains`. |
+| `proxmox_list_tasks` | List recent PVE tasks (vzdump/snapshot/...) with start time, status and UPID. Filter by `typefilter`, `vmid`, `errors_only`. |
+| `proxmox_get_task_log` | Read a PVE task's log lines by UPID — e.g. the exact reason a `vzdump` run failed. |
+| `proxmox_list_backup_jobs` | List configured `vzdump` jobs (schedule, storage, vmids, retention) from `/cluster/backup`. |
+
 ### Bulk ZFS maintenance (Phase 2.5 — SSH-backed)
 
 | Tool | Description |
 |---|---|
 | `proxmox_zfs_destroy_snapshots_by_pattern` | Bulk-delete ZFS snapshots whose name matches a glob pattern. Two-step: `dry_run=true` (default) lists matches; setting `dry_run=false` with `confirm=true` and `i_understand_data_loss=true` actually deletes. Capped at `max_delete` (default 1000). |
+| `proxmox_cleanup_vzdump_snapshots` | **Phase 7 self-heal.** Remove leftover `@vzdump` ZFS snapshots that block a guest's backups (a stale scratch snapshot from an interrupted run makes every later backup fail with `dataset already exists`). Targets **only** names ending in `@vzdump` and skips any younger than `min_age_minutes` (default 30) so it can never race a running backup. `dry_run=true` by default; real removal needs `dry_run=false` + `confirm=true`. |
 
 ### Built-in safety
 

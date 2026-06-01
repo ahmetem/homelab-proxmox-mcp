@@ -64,11 +64,21 @@ araçlar da kayıtlıdır — tam liste için `python proxmox_mcp.py --help`
 | `proxmox_ct_service_action` | `proxmox_lxc_exec` üzerine typed kısayol: bir CT içinde `systemctl --no-pager <action> <service>`. Salt-okunur action'lar (status, is-active, is-enabled, show) `confirm` istemez; durum değiştirenler (start, stop, restart, reload, enable, disable, mask, unmask) `confirm=true` gerektirir. |
 | `proxmox_ct_log_tail` | Bir CT içinden journald unit veya log dosyası tail eden salt-okunur araç. İki mod: `service` (journalctl -u) ve `file` (tail -n). Opsiyonel `grep` server-side filter. |
 
+### Tanılama & adli inceleme (Phase 7 — salt-okunur)
+
+| Araç | Açıklama |
+|------|----------|
+| `proxmox_zfs_list_snapshots` | ZFS snapshot'larını (name, used, referenced, creation) doğrudan SSH ile listeler; PVE config-snapshot API'sinin hiç göstermediği geçici `@vzdump` scratch snapshot'ları **dahil**. `dataset` ve/veya `contains` ile filtrelenir. |
+| `proxmox_list_tasks` | Son PVE task'larını (vzdump/snapshot/...) başlangıç zamanı, durum ve UPID ile listeler. `typefilter`, `vmid`, `errors_only` ile filtrelenir. |
+| `proxmox_get_task_log` | Bir PVE task'ının log satırlarını UPID ile okur — ör. bir `vzdump` çalışmasının tam olarak neden başarısız olduğunu. |
+| `proxmox_list_backup_jobs` | `/cluster/backup`'tan yapılandırılmış `vzdump` job'larını (schedule, storage, vmid, retention) listeler. |
+
 ### Toplu ZFS bakımı (Phase 2.5 — SSH tabanlı)
 
 | Araç | Açıklama |
 |---|---|
 | `proxmox_zfs_destroy_snapshots_by_pattern` | Glob pattern'ine uyan ZFS snapshot'larını toplu siler. İki aşamalı: `dry_run=true` (varsayılan) eşleşmeleri listeler; `dry_run=false` + `confirm=true` + `i_understand_data_loss=true` ile gerçek silme yapılır. `max_delete` (varsayılan 1000) ile sınırlanmıştır. |
+| `proxmox_cleanup_vzdump_snapshots` | **Phase 7 self-heal.** Bir guest'in yedeklerini bloke eden artık `@vzdump` ZFS snapshot'larını temizler (yarıda kalan bir çalışmadan kalan scratch snapshot, sonraki tüm yedeklerin `dataset already exists` ile patlamasına yol açar). **Yalnızca** `@vzdump` ile biten isimleri hedefler ve `min_age_minutes`'ten (varsayılan 30) genç olanları atlar; çalışan bir yedeği asla kesmez. Varsayılan `dry_run=true`; gerçek silme için `dry_run=false` + `confirm=true` gerekir. |
 
 ### Güvenlik
 
