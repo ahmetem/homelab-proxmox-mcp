@@ -29,4 +29,7 @@ from proxmox_mcp.tools import (  # noqa: F401
     # Phase 6 (LXC container exec via pct exec — typed wrapper on host SSH)
     lxc_exec,
     ct_ops,
+    # Phase 7 (read-only forensics + narrow backup self-heal)
+    diag_read,
+    backup_maint,
 )
