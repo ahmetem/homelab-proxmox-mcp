@@ -98,6 +98,12 @@ TOOLS = [
     "proxmox_lxc_exec",
     "proxmox_ct_service_action",
     "proxmox_ct_log_tail",
+    # Phase 7: read-only forensics + cleanup
+    "proxmox_zfs_list_snapshots",
+    "proxmox_list_tasks",
+    "proxmox_get_task_log",
+    "proxmox_list_backup_jobs",
+    "proxmox_cleanup_vzdump_snapshots",
 ]
 
 
