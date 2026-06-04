@@ -11,82 +11,153 @@ should work — every tool accepts a `node` parameter.
 
 ## Features
 
-The package exposes 58 tools across nine phases. The core/"Phase 0"
-surface is summarised below by category; advanced tools for disk
-preparation, LVM, ZFS, guest SSH, host SSH, LXC exec, and bulk
-snapshot cleanup are also registered — run `python proxmox_mcp.py --help`
-for the full list.
+The package exposes **63 tools** across nine phases (0–7, plus an extra
+"2.5"), grouped by category below. Read-only tools are safe to call
+automatically; every state-changing tool requires `confirm=true`, and
+tools that destroy persistent data additionally require
+`i_understand_data_loss=true` (see **Built-in safety**).
 
-### Read-only (safe to call automatically)
+### Cluster & nodes (read-only)
 
 | Tool | Description |
 |---|---|
 | `proxmox_list_nodes` | List all nodes in the cluster with status, uptime, CPU and memory usage |
 | `proxmox_get_node_status` | Detailed status for one node: CPU model, kernel, load average, disk, swap |
-| `proxmox_list_vms` | List every VM and LXC container across the cluster |
-| `proxmox_get_vm_status` | Detailed runtime metrics for a single VM/CT |
-| `proxmox_list_storage` | Storage pools on a node with usage info |
-| `proxmox_storage_usage_detail` | Per-storage content breakdown: items by type with totals, plus top-N largest items. Useful for capacity planning ("which VM is eating my backup storage?"). |
-| `proxmox_list_backups` | Backup files on a storage |
-| `proxmox_list_snapshots` | Snapshots for a specific VM/CT |
 
-### Power actions (require `confirm=true`)
+### VMs & containers
 
 | Tool | Description |
 |---|---|
+| `proxmox_list_vms` | List every VM and LXC container across the cluster (read-only) |
+| `proxmox_get_vm_status` | Detailed runtime metrics for a single VM/CT (read-only) |
 | `proxmox_vm_start` | Start a VM or LXC container |
 | `proxmox_vm_shutdown` | Graceful ACPI shutdown |
 | `proxmox_vm_stop` | Force stop (pull the plug) — may cause data loss |
 | `proxmox_vm_reboot` | Graceful reboot, then power cycle if needed |
+| `proxmox_resize_vm` | Change RAM (`memory_mb`) and/or CPU `cores` of a VM/CT |
 
-### Snapshots & backups (require `confirm=true`)
+### Snapshots
 
 | Tool | Description |
 |---|---|
+| `proxmox_list_snapshots` | Snapshots for a specific VM/CT (read-only) |
 | `proxmox_create_snapshot` | Create a snapshot of a VM/CT |
 | `proxmox_rollback_snapshot` | Rollback to a snapshot — data after it is lost |
+| `proxmox_delete_snapshot` | Delete a named snapshot of a VM/CT |
+
+### Backups
+
+| Tool | Description |
+|---|---|
+| `proxmox_list_backups` | Backup files on a storage (read-only) |
 | `proxmox_create_backup` | Create a backup with selectable mode and compression |
 | `proxmox_restore_backup` | Restore a VM/CT from a backup archive. Refuses to overwrite an existing VMID unless `force=true` and `i_understand_data_loss=true`. |
 
-### Configuration (requires `confirm=true`)
+### Storage (read-only)
 
 | Tool | Description |
 |---|---|
-| `proxmox_resize_vm` | Change RAM (`memory_mb`) and/or CPU `cores` of a VM/CT |
+| `proxmox_list_storage` | Storage pools on a node with usage info |
+| `proxmox_storage_usage_detail` | Per-storage content breakdown: items by type with totals, plus top-N largest items. Useful for capacity planning ("which VM is eating my backup storage?"). |
 
-### Guest exec (Phase 4 / 6 — full shell, audit-logged)
+### Phase 1 — disk / LVM / ZFS inventory (read-only)
 
 | Tool | Description |
 |---|---|
+| `proxmox_list_disks` | Physical disks on a node: model, size, type, health, usage |
+| `proxmox_get_disk_smart` | SMART health and attributes for one physical disk |
+| `proxmox_list_lvm` | LVM volume groups and logical volumes on a node |
+| `proxmox_list_lvm_thin` | LVM-thin pools on a node |
+| `proxmox_list_zfs` | ZFS pools on a node with capacity/health |
+| `proxmox_get_zfs_pool` | Detailed status of a single ZFS pool |
+
+### Phase 2 — disk preparation & storage provisioning
+
+| Tool | Description |
+|---|---|
+| `proxmox_disk_init_gpt` | Initialize a blank disk with a GPT partition table |
+| `proxmox_wipe_disk` | Wipe all partitions/signatures from a disk (destructive) |
+| `proxmox_create_lvm_vg` | Create an LVM volume group on a disk |
+| `proxmox_create_lvm_thin` | Create an LVM-thin pool |
+| `proxmox_destroy_lvm_vg` | Destroy an LVM volume group (destructive) |
+| `proxmox_destroy_lvm_thin` | Destroy an LVM-thin pool (destructive) |
+| `proxmox_create_zfs_pool` | Create a ZFS pool across one or more disks |
+| `proxmox_destroy_zfs_pool` | Destroy a ZFS pool (destructive) |
+| `proxmox_list_cluster_storage` | List datacenter-level storage configuration (read-only) |
+| `proxmox_add_zfs_storage` | Register an existing ZFS pool as Proxmox storage |
+| `proxmox_add_dir_storage` | Register a directory as Proxmox storage |
+| `proxmox_remove_storage` | Remove a storage entry from the datacenter config |
+
+### Phase 2.5 — SSH-backed ZFS / disk ops
+
+These run shell commands on the node over SSH, for operations the API
+token can't perform. They need the SSH configuration described in the
+[Configuration reference](#configuration-reference).
+
+| Tool | Description |
+|---|---|
+| `proxmox_ssh_wipe_disk` | Wipe a disk over SSH (destructive) |
+| `proxmox_ssh_init_gpt` | Initialize a GPT label over SSH |
+| `proxmox_zfs_create_dataset` | Create a ZFS dataset/filesystem |
+| `proxmox_zfs_destroy_dataset` | Destroy a ZFS dataset (destructive) |
+| `proxmox_zfs_set_property` | Set a property on a ZFS dataset |
+| `proxmox_zfs_create_snapshot` | Create a ZFS snapshot of a dataset |
+| `proxmox_zfs_list_datasets` | List ZFS datasets (read-only) |
+| `proxmox_zfs_destroy_snapshots_by_pattern` | Bulk-delete ZFS snapshots whose name matches a glob pattern. Two-step: `dry_run=true` (default) lists matches; `dry_run=false` with `confirm=true` and `i_understand_data_loss=true` actually deletes. Capped at `max_delete` (default 1000). |
+
+### Phase 3 — VM disk / clone / ISO + ZFS status
+
+| Tool | Description |
+|---|---|
+| `proxmox_move_disk` | Move a VM disk to another storage |
+| `proxmox_clone_vm` | Clone a VM/CT to a new VMID |
+| `proxmox_list_isos` | List ISO images available on storages (read-only) |
+| `proxmox_zfs_get_property` | Read a property from a ZFS dataset/pool (read-only) |
+| `proxmox_zfs_pool_status` | `zpool status` for a pool: health, errors, scrub state (read-only) |
+| `proxmox_zfs_scrub` | Start a scrub on a ZFS pool |
+| `proxmox_zfs_send` | ZFS send stream for replication |
+
+### Phase 4 — guest VM SSH (full shell, audit-logged)
+
+| Tool | Description |
+|---|---|
+| `proxmox_vm_list_hosts` | List guest VM aliases registered in `vm_ssh_hosts.json` (read-only) |
 | `proxmox_vm_exec` | Run a shell command on a registered guest VM via SSH (uses `vm_ssh_hosts.json`). Requires `confirm=true`. |
+| `proxmox_vm_read_file` | Read a file from a registered guest VM over SSH (read-only) |
+
+### Phase 5 — Proxmox host SSH (full shell, audit-logged)
+
+| Tool | Description |
+|---|---|
+| `proxmox_host_exec` | Run an arbitrary shell command on the Proxmox host over SSH. Requires `confirm=true`; commands matching destructive patterns also require `i_understand_data_loss=true`. Every call is appended to `_host_ssh_audit.log`. |
+
+### Phase 6 — LXC exec
+
+| Tool | Description |
+|---|---|
 | `proxmox_lxc_exec` | Run a shell command inside an LXC container via `pct exec` from the Proxmox host. No SSH inside the CT needed. Requires `confirm=true`. |
 | `proxmox_ct_service_action` | Typed shortcut on top of `proxmox_lxc_exec`: `systemctl --no-pager <action> <service>` inside a CT. Read-only actions (status, is-active, is-enabled, show) skip `confirm`; state-changing actions (start, stop, restart, reload, enable, disable, mask, unmask) require `confirm=true`. |
 | `proxmox_ct_log_tail` | Read-only tail of a journald unit or log file from inside a CT. Two modes: `service` (journalctl -u) and `file` (tail -n). Optional `grep` server-side filter. |
 
-### Diagnostics & forensics (Phase 7 — read-only)
+### Phase 7 — diagnostics, forensics & cleanup
 
 | Tool | Description |
 |------|-------------|
-| `proxmox_zfs_list_snapshots` | List ZFS snapshots (name, used, referenced, creation) directly via SSH, **including** transient `@vzdump` scratch snapshots the PVE config-snapshot API never reports. Filter by `dataset` and/or `contains`. |
-| `proxmox_list_tasks` | List recent PVE tasks (vzdump/snapshot/...) with start time, status and UPID. Filter by `typefilter`, `vmid`, `errors_only`. |
-| `proxmox_get_task_log` | Read a PVE task's log lines by UPID — e.g. the exact reason a `vzdump` run failed. |
-| `proxmox_list_backup_jobs` | List configured `vzdump` jobs (schedule, storage, vmids, retention) from `/cluster/backup`. |
-
-### Bulk ZFS maintenance (Phase 2.5 — SSH-backed)
-
-| Tool | Description |
-|---|---|
-| `proxmox_zfs_destroy_snapshots_by_pattern` | Bulk-delete ZFS snapshots whose name matches a glob pattern. Two-step: `dry_run=true` (default) lists matches; setting `dry_run=false` with `confirm=true` and `i_understand_data_loss=true` actually deletes. Capped at `max_delete` (default 1000). |
-| `proxmox_cleanup_vzdump_snapshots` | **Phase 7 self-heal.** Remove leftover `@vzdump` ZFS snapshots that block a guest's backups (a stale scratch snapshot from an interrupted run makes every later backup fail with `dataset already exists`). Targets **only** names ending in `@vzdump` and skips any younger than `min_age_minutes` (default 30) so it can never race a running backup. `dry_run=true` by default; real removal needs `dry_run=false` + `confirm=true`. |
+| `proxmox_zfs_list_snapshots` | List ZFS snapshots (name, used, referenced, creation) directly via SSH, **including** transient `@vzdump` scratch snapshots the PVE config-snapshot API never reports. Filter by `dataset` and/or `contains`. (read-only) |
+| `proxmox_list_tasks` | List recent PVE tasks (vzdump/snapshot/...) with start time, status and UPID. Filter by `typefilter`, `vmid`, `errors_only`. (read-only) |
+| `proxmox_get_task_log` | Read a PVE task's log lines by UPID — e.g. the exact reason a `vzdump` run failed. (read-only) |
+| `proxmox_list_backup_jobs` | List configured `vzdump` jobs (schedule, storage, vmids, retention) from `/cluster/backup`. (read-only) |
+| `proxmox_cleanup_vzdump_snapshots` | **Self-heal.** Remove leftover `@vzdump` ZFS snapshots that block a guest's backups (a stale scratch snapshot from an interrupted run makes every later backup fail with `dataset already exists`). Targets **only** names ending in `@vzdump` and skips any younger than `min_age_minutes` (default 30) so it can never race a running backup. `dry_run=true` by default; real removal needs `dry_run=false` + `confirm=true`. |
 
 ### Built-in safety
 
 All destructive or state-changing actions require `confirm=true`. Tools
 that destroy persistent data (snapshot delete, backup restore with
-overwrite, bulk snapshot destroy, ZFS dataset destroy, etc.) additionally
-require `i_understand_data_loss=true`. The agent must explicitly pass
-both flags, which in practice means Claude only fires these after the
-user clearly asks for the action. Read-only tools have no such guard.
+overwrite, disk wipe, LVM/ZFS pool/dataset destroy, bulk snapshot
+destroy, etc.) additionally require `i_understand_data_loss=true`. The
+agent must explicitly pass both flags, which in practice means Claude
+only fires these after the user clearly asks for the action. Read-only
+tools have no such guard.
 
 ## Requirements
 
@@ -274,6 +345,24 @@ All settings come from environment variables, loaded from `.env`:
 | `PROXMOX_VERIFY_SSL` | `false` | Verify the TLS certificate of the API |
 | `PROXMOX_TIMEOUT` | `30` | HTTP timeout in seconds |
 
+### SSH (optional — required by Phase 2.5 / 4 / 5 / 6 tools)
+
+The SSH-backed tools run shell commands on the Proxmox host (and, for
+`proxmox_vm_*`, on guest VMs). They are inactive until you configure SSH.
+`PROXMOX_SSH_HOST` defaults to `PROXMOX_HOST`. Prefer key auth; if both a
+key and a password are set, the key is used. Guest VMs are defined
+separately in `vm_ssh_hosts.json`.
+
+| Variable | Default | Description |
+|---|---|---|
+| `PROXMOX_SSH_HOST` | = `PROXMOX_HOST` | Host for the host-level SSH tools |
+| `PROXMOX_SSH_PORT` | `22` | SSH port |
+| `PROXMOX_SSH_USER` | `root` | SSH user |
+| `PROXMOX_SSH_KEY_PATH` | — | Path to a private key (preferred auth) |
+| `PROXMOX_SSH_PASSWORD` | — | Password auth (fallback if no key) |
+| `PROXMOX_SSH_KNOWN_HOSTS` | — | Path to a known_hosts file; `ignore` skips host-key verification (trusted LAN only) |
+| `PROXMOX_SSH_TIMEOUT` | `30` | SSH connect timeout in seconds |
+
 ## Security notes
 
 - The token secret sits in `.env`. Restrict that file to your user account
@@ -315,13 +404,23 @@ All settings come from environment variables, loaded from `.env`:
 
 ```
 proxmox-mcp/
-├── proxmox_mcp.py      # The MCP server
-├── requirements.txt    # Python dependencies
-├── .env.example        # Template for your local .env
+├── proxmox_mcp/             # The MCP server package
+│   ├── __main__.py          # entry for `python -m proxmox_mcp`
+│   ├── server.py            # entry point + full tool registry (TOOLS)
+│   ├── mcp_instance.py      # the shared FastMCP instance
+│   ├── config.py            # environment-variable configuration
+│   ├── http_client.py       # Proxmox REST client
+│   ├── ssh.py / host_ssh.py / vm_ssh.py   # SSH backends (host + guests)
+│   └── tools/               # one module per tool group (nodes, vms,
+│                            #   disks, lvm, zfs, backups, ct_ops, …)
+├── proxmox_mcp.py           # compatibility shim (`python proxmox_mcp.py`)
+├── requirements.txt         # Python dependencies
+├── .env.example             # Template for your local .env
+├── vm_ssh_hosts.json        # (git-ignored) guest-VM SSH registry
 ├── .gitignore
-├── LICENSE             # GPL v3
-├── README.md           # This file
-└── README.tr.md        # Turkish version
+├── LICENSE                  # GPL v3
+├── README.md                # This file
+└── README.tr.md             # Turkish version
 ```
 
 ## Contributing
