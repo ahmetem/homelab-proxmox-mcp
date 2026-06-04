@@ -80,6 +80,7 @@ class HostSpec:
     key_path: str
     known_hosts: Optional[str]  # path, "ignore" -> None for asyncssh
     description: str
+    jump: Optional[str] = None  # "host" -> tunnel via Proxmox host bastion (config.PROXMOX_SSH_*)
 
 
 class VmSshError(Exception):
@@ -122,6 +123,8 @@ def load_registry() -> dict[str, HostSpec]:
                 f"Alias '{alias}' has no key_path and PROXMOX_SSH_KEY_PATH is empty."
             )
         known_hosts = spec.get("known_hosts", "ignore")
+        jump_raw = spec.get("jump")
+        jump = str(jump_raw).strip() if jump_raw else None
         out[alias] = HostSpec(
             alias=alias,
             host=host,
@@ -130,6 +133,7 @@ def load_registry() -> dict[str, HostSpec]:
             key_path=key_path,
             known_hosts=str(known_hosts) if known_hosts else "ignore",
             description=str(spec.get("description", "")),
+            jump=jump,
         )
     return out
 
@@ -191,24 +195,58 @@ async def _connect(spec: HostSpec):
         )
 
     known_hosts_arg = None if (spec.known_hosts or "").lower() == "ignore" else spec.known_hosts
+
+    tunnel_conn = None
     try:
-        return await asyncssh.connect(
+        if spec.jump:
+            # Tunnel through the Proxmox host bastion (config.PROXMOX_SSH_*),
+            # so the VM never needs to be exposed to the internet. The VM
+            # `host` is resolved from the bastion's network (its LAN IP).
+            if not config.PROXMOX_SSH_HOST:
+                raise VmSshError(
+                    f"Alias '{spec.alias}' requests jump='{spec.jump}' but "
+                    "PROXMOX_SSH_HOST is not set in .env."
+                )
+            j_known = (
+                None
+                if (config.PROXMOX_SSH_KNOWN_HOSTS or "").lower() == "ignore"
+                else config.PROXMOX_SSH_KNOWN_HOSTS
+            )
+            tunnel_conn = await asyncssh.connect(
+                host=config.PROXMOX_SSH_HOST,
+                port=config.PROXMOX_SSH_PORT,
+                username=config.PROXMOX_SSH_USER,
+                client_keys=[config.PROXMOX_SSH_KEY_PATH],
+                known_hosts=j_known,
+                connect_timeout=10,
+            )
+        conn = await asyncssh.connect(
             host=spec.host,
             port=spec.port,
             username=spec.user,
             client_keys=[spec.key_path],
             known_hosts=known_hosts_arg,
             connect_timeout=10,
+            tunnel=tunnel_conn,
         )
+        return conn, tunnel_conn
     except asyncssh.PermissionDenied as exc:
+        if tunnel_conn is not None:
+            tunnel_conn.close()
         raise VmSshError(f"SSH auth failed for {spec.alias}: {exc}")
     except (asyncssh.HostKeyNotVerifiable, asyncssh.KeyExchangeFailed) as exc:
+        if tunnel_conn is not None:
+            tunnel_conn.close()
         raise VmSshError(
             f"Host key verification failed for {spec.alias}: {exc}"
         )
     except OSError as exc:
+        if tunnel_conn is not None:
+            tunnel_conn.close()
         raise VmSshError(
-            f"Cannot connect to {spec.host}:{spec.port}: {exc}"
+            f"Cannot connect to {spec.host}:{spec.port}"
+            + (f" via jump {config.PROXMOX_SSH_HOST}:{config.PROXMOX_SSH_PORT}" if spec.jump else "")
+            + f": {exc}"
         )
 
 
@@ -223,7 +261,7 @@ async def exec_command(
     Output is capped at MAX_OUTPUT_BYTES per stream.
     """
     spec = resolve(alias)
-    conn = await _connect(spec)
+    conn, tunnel_conn = await _connect(spec)
     try:
         try:
             result = await conn.run(cmd, check=False, timeout=timeout)
@@ -238,6 +276,12 @@ async def exec_command(
             await conn.wait_closed()
         except Exception:
             pass
+        if tunnel_conn is not None:
+            tunnel_conn.close()
+            try:
+                await tunnel_conn.wait_closed()
+            except Exception:
+                pass
 
 
 def format_vm_ssh_error(exc: Exception) -> str:
