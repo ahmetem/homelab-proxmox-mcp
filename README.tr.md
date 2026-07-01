@@ -12,7 +12,7 @@ kümelerde de çalışır — her araç bir `node` parametresi alır.
 
 ## Özellikler
 
-Paket, dokuz faz (0–7, ayrıca bir "2.5") içinde **63 araç** sunar;
+Paket, dokuz faz (0–7, ayrıca bir "2.5") içinde **64 araç** sunar;
 aşağıda kategoriye göre gruplanmıştır. Salt-okunur araçlar otomatik
 çağrılabilir; durum değiştiren her araç `confirm=true`, kalıcı veri silen
 araçlar ayrıca `i_understand_data_loss=true` gerektirir (bkz. **Güvenlik**).
@@ -130,6 +130,7 @@ bölümündeki SSH ayarlarını gerektirir.
 | Araç | Açıklama |
 |---|---|
 | `proxmox_host_exec` | Proxmox host'ta SSH üzerinden serbest shell komutu çalıştırır. `confirm=true` gerektirir; yıkıcı pattern'lere uyan komutlar ayrıca `i_understand_data_loss=true` ister. Her çağrı `_host_ssh_audit.log`'a yazılır. |
+| `proxmox_host_read_exec` | Proxmox host'ta tek bir **salt-okuma**, allowlist'li komut çalıştırır (`cat`, `tail`, `journalctl`, `zpool status`, `systemctl status`, `pct`/`qm config`, …). `confirm` gerekmez — shell metakarakterlerini (pipe/redirect/substitution/zincirleme), allowlist-dışı binary'leri, mutasyon alt-komutlarını ve askıda kalan/durum değiştiren bayrakları reddeder. Salt-okuma ajanlara güvenle verilebilir. |
 
 ### Phase 6 — LXC exec
 

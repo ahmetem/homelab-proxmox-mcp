@@ -11,7 +11,7 @@ should work — every tool accepts a `node` parameter.
 
 ## Features
 
-The package exposes **63 tools** across nine phases (0–7, plus an extra
+The package exposes **64 tools** across nine phases (0–7, plus an extra
 "2.5"), grouped by category below. Read-only tools are safe to call
 automatically; every state-changing tool requires `confirm=true`, and
 tools that destroy persistent data additionally require
@@ -130,6 +130,7 @@ token can't perform. They need the SSH configuration described in the
 | Tool | Description |
 |---|---|
 | `proxmox_host_exec` | Run an arbitrary shell command on the Proxmox host over SSH. Requires `confirm=true`; commands matching destructive patterns also require `i_understand_data_loss=true`. Every call is appended to `_host_ssh_audit.log`. |
+| `proxmox_host_read_exec` | Run a single **read-only**, allow-listed command on the Proxmox host (`cat`, `tail`, `journalctl`, `zpool status`, `systemctl status`, `pct`/`qm config`, …). No `confirm` needed — rejects shell metacharacters (pipes/redirects/substitution/chaining), non-allow-listed binaries, mutating subcommands, and hanging/state-changing flags. Safe to grant to read-only agents. |
 
 ### Phase 6 — LXC exec
 

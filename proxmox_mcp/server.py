@@ -94,6 +94,8 @@ TOOLS = [
     "proxmox_vm_read_file",
     # Phase 5: Proxmox host SSH (full shell exec, audit-logged)
     "proxmox_host_exec",
+    # Phase 5.5: Proxmox host SSH (allow-listed read-only exec)
+    "proxmox_host_read_exec",
     # Phase 6: LXC container exec via pct exec (typed wrapper on host SSH)
     "proxmox_lxc_exec",
     "proxmox_ct_service_action",
