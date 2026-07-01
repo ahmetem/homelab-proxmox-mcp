@@ -13,14 +13,13 @@ attaching pre-existing pools or for cleanup.
 """
 from __future__ import annotations
 
-import json
 from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from proxmox_mcp import http_client
 from proxmox_mcp.config import require_config
-from proxmox_mcp.format import missing_confirm
+from proxmox_mcp.format import compact_json, missing_confirm
 from proxmox_mcp.mcp_instance import mcp
 from proxmox_mcp.models import FormatInput, ResponseFormat
 
@@ -97,7 +96,7 @@ async def proxmox_list_cluster_storage(params: FormatInput) -> str:
         return http_client.format_http_error(exc)
 
     if params.response_format == ResponseFormat.JSON:
-        return json.dumps(items, indent=2, default=str)
+        return compact_json(items)
 
     if not items:
         return "_No cluster storage entries defined._"

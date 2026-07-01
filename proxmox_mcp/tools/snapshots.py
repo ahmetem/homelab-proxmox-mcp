@@ -2,14 +2,13 @@
 from __future__ import annotations
 
 import datetime as _dt
-import json
 from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from proxmox_mcp import http_client
 from proxmox_mcp.config import require_config
-from proxmox_mcp.format import missing_confirm, missing_data_loss_ack
+from proxmox_mcp.format import compact_json, missing_confirm, missing_data_loss_ack
 from proxmox_mcp.mcp_instance import mcp
 from proxmox_mcp.models import (
     ResponseFormat,
@@ -69,7 +68,7 @@ async def proxmox_list_snapshots(params: VMInput) -> str:
         return http_client.format_http_error(exc)
 
     if params.response_format == ResponseFormat.JSON:
-        return json.dumps(snaps, indent=2, default=str)
+        return compact_json(snaps)
 
     if not snaps:
         return f"_No snapshots for VM {params.vmid}._"

@@ -1,11 +1,9 @@
 """Node-level read-only tools."""
 from __future__ import annotations
 
-import json
-
 from proxmox_mcp import http_client
 from proxmox_mcp.config import require_config
-from proxmox_mcp.format import fmt_bytes, fmt_uptime, status_icon
+from proxmox_mcp.format import compact_json, fmt_bytes, fmt_uptime, status_icon
 from proxmox_mcp.mcp_instance import mcp
 from proxmox_mcp.models import FormatInput, NodeInput, ResponseFormat
 
@@ -35,7 +33,7 @@ async def proxmox_list_nodes(params: FormatInput) -> str:
         return http_client.format_http_error(exc)
 
     if params.response_format == ResponseFormat.JSON:
-        return json.dumps(nodes, indent=2, default=str)
+        return compact_json(nodes)
 
     if not nodes:
         return "_No nodes found._"
@@ -80,7 +78,7 @@ async def proxmox_get_node_status(params: NodeInput) -> str:
         return http_client.format_http_error(exc)
 
     if params.response_format == ResponseFormat.JSON:
-        return json.dumps(status, indent=2, default=str)
+        return compact_json(status)
 
     cpu = status.get("cpuinfo", {}) or {}
     mem = status.get("memory", {}) or {}

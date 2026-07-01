@@ -9,13 +9,11 @@ snapshot, send/recv, and property tools.
 """
 from __future__ import annotations
 
-import json
-
 from pydantic import BaseModel, ConfigDict, Field
 
 from proxmox_mcp import http_client
 from proxmox_mcp.config import require_config
-from proxmox_mcp.format import fmt_bytes, health_icon
+from proxmox_mcp.format import compact_json, fmt_bytes, health_icon
 from proxmox_mcp.mcp_instance import mcp
 from proxmox_mcp.models import NodeInput, ResponseFormat
 
@@ -90,7 +88,7 @@ async def proxmox_list_zfs(params: NodeInput) -> str:
         return http_client.format_http_error(exc)
 
     if params.response_format == ResponseFormat.JSON:
-        return json.dumps(pools, indent=2, default=str)
+        return compact_json(pools)
 
     if not pools:
         return f"_No ZFS pools on `{params.node}`._"
@@ -150,7 +148,7 @@ async def proxmox_get_zfs_pool(params: ZfsPoolInput) -> str:
         return http_client.format_http_error(exc)
 
     if params.response_format == ResponseFormat.JSON:
-        return json.dumps(data, indent=2, default=str)
+        return compact_json(data)
 
     if not data:
         return f"_Pool `{params.name}` not found on `{params.node}`._"

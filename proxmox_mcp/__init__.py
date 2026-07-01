@@ -2,4 +2,5 @@
 
 from proxmox_mcp.server import mcp, main
 
-__all__ = ["mcp", "main"]
+__version__ = "0.8.0"
+__all__ = ["mcp", "main", "__version__"]

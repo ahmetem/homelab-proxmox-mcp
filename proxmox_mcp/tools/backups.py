@@ -2,11 +2,15 @@
 from __future__ import annotations
 
 import datetime as _dt
-import json
 
 from proxmox_mcp import http_client
 from proxmox_mcp.config import require_config
-from proxmox_mcp.format import fmt_bytes, missing_confirm, missing_data_loss_ack
+from proxmox_mcp.format import (
+    compact_json,
+    fmt_bytes,
+    missing_confirm,
+    missing_data_loss_ack,
+)
 from proxmox_mcp.mcp_instance import mcp
 from proxmox_mcp.models import (
     BackupCreateInput,
@@ -44,7 +48,7 @@ async def proxmox_list_backups(params: StorageInput) -> str:
         return http_client.format_http_error(exc)
 
     if params.response_format == ResponseFormat.JSON:
-        return json.dumps(backups, indent=2, default=str)
+        return compact_json(backups)
 
     if not backups:
         return f"_No backups on `{params.storage}`._"

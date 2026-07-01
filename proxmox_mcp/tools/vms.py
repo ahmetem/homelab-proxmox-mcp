@@ -1,12 +1,17 @@
 """VM and container lifecycle / status / resize tools."""
 from __future__ import annotations
 
-import json
 from typing import Any
 
 from proxmox_mcp import http_client
 from proxmox_mcp.config import require_config
-from proxmox_mcp.format import fmt_bytes, fmt_uptime, missing_confirm, status_icon
+from proxmox_mcp.format import (
+    compact_json,
+    fmt_bytes,
+    fmt_uptime,
+    missing_confirm,
+    status_icon,
+)
 from proxmox_mcp.mcp_instance import mcp
 from proxmox_mcp.models import (
     FormatInput,
@@ -42,7 +47,7 @@ async def proxmox_list_vms(params: FormatInput) -> str:
         return http_client.format_http_error(exc)
 
     if params.response_format == ResponseFormat.JSON:
-        return json.dumps(vms, indent=2, default=str)
+        return compact_json(vms)
 
     if not vms:
         return "_No VMs or containers found._"
@@ -94,7 +99,7 @@ async def proxmox_get_vm_status(params: VMInput) -> str:
         return http_client.format_http_error(exc)
 
     if params.response_format == ResponseFormat.JSON:
-        return json.dumps(status, indent=2, default=str)
+        return compact_json(status)
 
     icon = status_icon(status.get("status", "?"))
     vmtype = "LXC Container" if actual_type == "lxc" else "QEMU VM"

@@ -8,11 +8,9 @@ Phase 2 will add create/destroy actions.
 """
 from __future__ import annotations
 
-import json
-
 from proxmox_mcp import http_client
 from proxmox_mcp.config import require_config
-from proxmox_mcp.format import fmt_bytes
+from proxmox_mcp.format import compact_json, fmt_bytes
 from proxmox_mcp.mcp_instance import mcp
 from proxmox_mcp.models import NodeInput, ResponseFormat
 
@@ -54,7 +52,7 @@ async def proxmox_list_lvm(params: NodeInput) -> str:
         return http_client.format_http_error(exc)
 
     if params.response_format == ResponseFormat.JSON:
-        return json.dumps(data, indent=2, default=str)
+        return compact_json(data)
 
     children = data.get("children") if isinstance(data, dict) else data
     if not children:
@@ -124,7 +122,7 @@ async def proxmox_list_lvm_thin(params: NodeInput) -> str:
         return http_client.format_http_error(exc)
 
     if params.response_format == ResponseFormat.JSON:
-        return json.dumps(pools, indent=2, default=str)
+        return compact_json(pools)
 
     if not pools:
         return f"_No LVM-thin pools on `{params.node}`._"

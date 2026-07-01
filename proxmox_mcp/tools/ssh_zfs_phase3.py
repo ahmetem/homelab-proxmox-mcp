@@ -6,7 +6,6 @@ _validate_snapname) and the ssh.run_command / ssh.run_pipeline helpers.
 """
 from __future__ import annotations
 
-import json
 import re
 from typing import Optional
 
@@ -15,6 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from proxmox_mcp import ssh
 from proxmox_mcp.config import require_ssh
 from proxmox_mcp.format import (
+    compact_json,
     fmt_bytes,
     health_icon,
     missing_confirm,
@@ -221,7 +221,7 @@ async def proxmox_zfs_get_property(params: ZfsGetPropertyInput) -> str:
 
     if params.response_format == ResponseFormat.JSON:
         keys = ["property", "value", "source"]
-        return json.dumps([dict(zip(keys, r)) for r in rows if len(r) >= 3], indent=2)
+        return compact_json([dict(zip(keys, r)) for r in rows if len(r) >= 3])
 
     if not rows:
         return f"_No properties returned for `{params.name}`._"
@@ -272,7 +272,7 @@ async def proxmox_zfs_pool_status(params: ZfsPoolStatusInput) -> str:
         return f"Error: zpool status failed (rc={rc}).\nstderr: {err.strip()}"
 
     if params.response_format == ResponseFormat.JSON:
-        return json.dumps({"output": out}, indent=2)
+        return compact_json({"output": out})
 
     text = out.strip() or "(no pools)"
     health_line = ""

@@ -1,6 +1,7 @@
 """Formatting helpers shared across modules."""
 from __future__ import annotations
 
+import json
 from typing import Any
 
 
@@ -72,3 +73,22 @@ def missing_data_loss_ack(action: str) -> str:
         "i_understand_data_loss=true in addition to confirm=true. "
         "Explain the consequences to the user and ask explicitly."
     )
+
+
+def truncate(s: str, limit: int = 8000) -> str:
+    """Hard-cap a response string so a pathological result can't blow up the
+    model's context. Appends a marker noting the original length."""
+    if len(s) <= limit:
+        return s
+    return s[:limit] + f"\n\n... [truncated, total {len(s)} chars]"
+
+
+def compact_json(obj: Any, limit: int = 8000) -> str:
+    """Serialize `obj` to compact JSON (no indent whitespace) and hard-cap the
+    length. Used by the opt-in `response_format=json` branches.
+
+    Compact separators drop ~30-40% of the bytes vs `indent=2` while staying
+    valid JSON; the length cap is a safety net for an unexpectedly huge payload
+    (truncation there yields invalid JSON, but that only triggers on
+    pathologically large output that would otherwise flood the context)."""
+    return truncate(json.dumps(obj, separators=(",", ":"), default=str), limit)

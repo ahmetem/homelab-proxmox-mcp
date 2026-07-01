@@ -9,7 +9,6 @@ auto-classify S1 - forensic reach without opening any mutating host shell.
 """
 from __future__ import annotations
 
-import json
 import re
 from datetime import datetime, timezone
 from typing import Optional
@@ -18,7 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from proxmox_mcp import host_ssh, http_client
 from proxmox_mcp.config import require_config, require_ssh
-from proxmox_mcp.format import fmt_bytes
+from proxmox_mcp.format import compact_json, fmt_bytes
 from proxmox_mcp.mcp_instance import mcp
 from proxmox_mcp.models import FormatInput, ResponseFormat
 
@@ -179,7 +178,7 @@ async def proxmox_list_backup_jobs(params: FormatInput) -> str:
     except Exception as exc:
         return http_client.format_http_error(exc)
     if params.response_format == ResponseFormat.JSON:
-        return json.dumps(jobs, indent=2, default=str)
+        return compact_json(jobs)
     if not jobs:
         return "_No backup jobs configured._"
     lines = ["## Backup jobs", ""]

@@ -14,7 +14,6 @@ requires i_understand_data_loss=true.
 from __future__ import annotations
 
 import fnmatch
-import json
 import re
 from typing import Optional
 
@@ -23,6 +22,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from proxmox_mcp import ssh
 from proxmox_mcp.config import require_ssh
 from proxmox_mcp.format import (
+    compact_json,
     fmt_bytes,
     health_icon,
     missing_confirm,
@@ -523,7 +523,7 @@ async def proxmox_zfs_list_datasets(params: ZfsListDatasetsInput) -> str:
 
     if params.response_format == ResponseFormat.JSON:
         keys = ["name", "type", "used", "avail", "refer", "mountpoint"]
-        return json.dumps([dict(zip(keys, r)) for r in rows], indent=2)
+        return compact_json([dict(zip(keys, r)) for r in rows])
 
     if not rows:
         scope = f" under `{params.pool}`" if params.pool else ""

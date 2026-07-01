@@ -16,7 +16,7 @@ from typing import Optional
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from proxmox_mcp import vm_ssh
-from proxmox_mcp.format import missing_confirm, missing_data_loss_ack
+from proxmox_mcp.format import compact_json, missing_confirm, missing_data_loss_ack
 from proxmox_mcp.mcp_instance import mcp
 from proxmox_mcp.models import ResponseFormat
 
@@ -108,12 +108,10 @@ async def proxmox_vm_list_hosts(params: VmListHostsInput) -> str:
         return vm_ssh.format_vm_ssh_error(exc)
 
     if params.response_format == ResponseFormat.JSON:
-        import json as _json
-        return _json.dumps(
+        return compact_json(
             {a: {"host": s.host, "port": s.port, "user": s.user,
                  "description": s.description}
-             for a, s in reg.items()},
-            indent=2,
+             for a, s in reg.items()}
         )
 
     if not reg:

@@ -10,14 +10,13 @@ Backed by Proxmox REST endpoints:
 """
 from __future__ import annotations
 
-import json
 from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from proxmox_mcp import http_client
 from proxmox_mcp.config import require_config
-from proxmox_mcp.format import fmt_bytes, health_icon
+from proxmox_mcp.format import compact_json, fmt_bytes, health_icon
 from proxmox_mcp.mcp_instance import mcp
 from proxmox_mcp.models import NodeInput, ResponseFormat
 
@@ -132,7 +131,7 @@ async def proxmox_list_disks(params: DiskListInput) -> str:
         return http_client.format_http_error(exc)
 
     if params.response_format == ResponseFormat.JSON:
-        return json.dumps(disks, indent=2, default=str)
+        return compact_json(disks)
 
     if not disks:
         return f"_No disks reported on `{params.node}`._"
@@ -203,7 +202,7 @@ async def proxmox_get_disk_smart(params: DiskSmartInput) -> str:
         return http_client.format_http_error(exc)
 
     if params.response_format == ResponseFormat.JSON:
-        return json.dumps(data, indent=2, default=str)
+        return compact_json(data)
 
     if not data:
         return f"_No SMART data available for `{params.disk}`._"
