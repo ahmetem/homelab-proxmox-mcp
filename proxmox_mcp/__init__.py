@@ -2,5 +2,5 @@
 
 from proxmox_mcp.server import mcp, main
 
-__version__ = "0.9.0"
+__version__ = "0.9.1"
 __all__ = ["mcp", "main", "__version__"]

@@ -32,7 +32,7 @@ from proxmox_mcp.models import (
         "openWorldHint": True,
     },
 )
-async def proxmox_list_vms(params: FormatInput) -> str:
+async def proxmox_list_vms(params: FormatInput = FormatInput()) -> str:
     """List all virtual machines and LXC containers across the cluster.
 
     Returns:

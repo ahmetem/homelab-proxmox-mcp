@@ -18,7 +18,7 @@ from proxmox_mcp.models import FormatInput, NodeInput, ResponseFormat
         "openWorldHint": True,
     },
 )
-async def proxmox_list_nodes(params: FormatInput) -> str:
+async def proxmox_list_nodes(params: FormatInput = FormatInput()) -> str:
     """List all nodes in the Proxmox cluster with status and resource usage.
 
     Returns:

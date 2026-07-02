@@ -5,6 +5,21 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.1] - 2026-07-02
+
+### Fixed
+- Read-only listing tools that take no required arguments
+  (`proxmox_list_nodes`, `proxmox_list_vms`, `proxmox_list_backup_jobs`,
+  `proxmox_list_cluster_storage`) could not be called without arguments: they
+  wrapped an all-optional Pydantic model in a single `params` parameter, and
+  FastMCP marks such a parameter as `required` in the tool's JSON schema. A
+  caller invoking them with no arguments got a `params Field required`
+  validation error; only an explicit `params: {}` worked. Gave `params` a
+  default (`FormatInput = FormatInput()`) on those four tools so `params` drops
+  out of the schema's `required` list and the tools are callable with no args
+  (defaulting to markdown output). Tools with genuinely required fields (e.g.
+  `proxmox_get_node_status`) are unchanged and still require `params`.
+
 ## [0.9.0] - 2026-07-02
 
 ### Added

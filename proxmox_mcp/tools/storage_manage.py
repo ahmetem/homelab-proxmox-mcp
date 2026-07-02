@@ -81,7 +81,7 @@ class StorageRemoveInput(BaseModel):
         "idempotentHint": True, "openWorldHint": True,
     },
 )
-async def proxmox_list_cluster_storage(params: FormatInput) -> str:
+async def proxmox_list_cluster_storage(params: FormatInput = FormatInput()) -> str:
     """List all storage entries defined in the cluster configuration.
 
     This is /etc/pve/storage.cfg — what is *defined*, not what is *active*

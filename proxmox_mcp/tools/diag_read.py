@@ -168,7 +168,7 @@ async def proxmox_get_task_log(params: TaskLogInput) -> str:
 
 @mcp.tool(name="proxmox_list_backup_jobs",
           annotations={"title": "List Backup Jobs (read-only)", **_READ_ONLY})
-async def proxmox_list_backup_jobs(params: FormatInput) -> str:
+async def proxmox_list_backup_jobs(params: FormatInput = FormatInput()) -> str:
     """List configured vzdump jobs (schedule, storage, vmids, retention)."""
     cfg = require_config()
     if cfg:
