@@ -21,7 +21,7 @@ from proxmox_mcp import http_client
 from proxmox_mcp.config import require_config
 from proxmox_mcp.format import compact_json, fmt_bytes, missing_confirm
 from proxmox_mcp.mcp_instance import mcp
-from proxmox_mcp.models import ResponseFormat
+from proxmox_mcp.models import WAIT_DESC, ResponseFormat
 
 
 _STORAGE_ID = r"^[A-Za-z][A-Za-z0-9_.-]*$"
@@ -68,6 +68,7 @@ class MoveDiskInput(BaseModel):
         ),
     )
     confirm: bool = Field(default=False)
+    wait_seconds: int = Field(default=0, ge=0, le=600, description=WAIT_DESC)
     reason: Optional[str] = Field(default=None, max_length=200)
 
 
@@ -108,6 +109,7 @@ class CloneVmInput(BaseModel):
     )
     description: Optional[str] = Field(default=None, max_length=200)
     confirm: bool = Field(default=False)
+    wait_seconds: int = Field(default=0, ge=0, le=600, description=WAIT_DESC)
     reason: Optional[str] = Field(default=None, max_length=200)
 
 
@@ -172,11 +174,16 @@ async def proxmox_move_disk(params: MoveDiskInput) -> str:
     except Exception as exc:
         return http_client.format_http_error(exc)
 
+    suffix = await http_client.wait_for_task(params.node, task_id, params.wait_seconds)
+    if not suffix:
+        suffix = (
+            " Runs in background; large disks can take many minutes. "
+            "VM stays online for QEMU."
+        )
     return (
         f"OK: Disk move started — {params.vm_type} {params.vmid} "
         f"`{params.disk}` → storage `{params.target_storage}`. "
-        f"Task: {task_id}. The operation runs in background; "
-        "large disks can take many minutes. VM stays online for QEMU."
+        f"Task: {task_id}.{suffix}"
     )
 
 
@@ -231,10 +238,12 @@ async def proxmox_clone_vm(params: CloneVmInput) -> str:
         return http_client.format_http_error(exc)
 
     mode = "full clone" if params.full else "linked clone"
+    suffix = await http_client.wait_for_task(params.node, task_id, params.wait_seconds)
+    if not suffix:
+        suffix = " Use proxmox_get_vm_status on the new ID once the task completes."
     return (
         f"OK: {mode.capitalize()} started — {params.vm_type} {params.vmid} "
-        f"→ {params.newid}. Task: {task_id}. "
-        "Use proxmox_get_vm_status on the new ID once the task completes."
+        f"→ {params.newid}. Task: {task_id}.{suffix}"
     )
 
 
@@ -247,11 +256,7 @@ async def proxmox_clone_vm(params: CloneVmInput) -> str:
     },
 )
 async def proxmox_list_isos(params: IsoListInput) -> str:
-    """List ISO images stored on a content-storage.
-
-    Returns:
-        str: For each ISO: filename, size, creation time, volid.
-    """
+    """List ISO images stored on a content-storage."""
     cfg = require_config()
     if cfg:
         return cfg

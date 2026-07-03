@@ -18,7 +18,7 @@ from proxmox_mcp import http_client
 from proxmox_mcp.config import require_config
 from proxmox_mcp.format import compact_json, fmt_bytes, health_icon
 from proxmox_mcp.mcp_instance import mcp
-from proxmox_mcp.models import NodeInput, ResponseFormat
+from proxmox_mcp.models import FIELDS_DESC, NodeInput, ResponseFormat
 
 
 class DiskSmartInput(BaseModel):
@@ -45,6 +45,7 @@ class DiskSmartInput(BaseModel):
         default=ResponseFormat.MARKDOWN,
         description="Output format: 'markdown' or 'json'.",
     )
+    fields: Optional[list[str]] = Field(default=None, description=FIELDS_DESC)
 
 
 class DiskListInput(BaseModel):
@@ -61,6 +62,7 @@ class DiskListInput(BaseModel):
         default=ResponseFormat.MARKDOWN,
         description="Output format: 'markdown' or 'json'.",
     )
+    fields: Optional[list[str]] = Field(default=None, description=FIELDS_DESC)
 
 
 def _disk_type_label(d: dict) -> str:
@@ -110,9 +112,6 @@ async def proxmox_list_disks(params: DiskListInput) -> str:
 
     Use this to answer 'what disks does the host actually see?' — including
     disks that aren't yet exposed as a Proxmox storage pool.
-
-    Returns:
-        str: Markdown table or JSON list of disks.
     """
     cfg = require_config()
     if cfg:
@@ -131,7 +130,7 @@ async def proxmox_list_disks(params: DiskListInput) -> str:
         return http_client.format_http_error(exc)
 
     if params.response_format == ResponseFormat.JSON:
-        return compact_json(disks)
+        return compact_json(disks, fields=params.fields)
 
     if not disks:
         return f"_No disks reported on `{params.node}`._"
@@ -179,12 +178,8 @@ async def proxmox_get_disk_smart(params: DiskSmartInput) -> str:
     Set healthonly=true for just the overall PASSED/FAILED verdict (fast).
     Default (healthonly=false) returns the full attribute table.
 
-    For NVMe devices Proxmox returns NVMe-style fields (critical warning,
-    media errors, percentage used, temperature, etc.) instead of classic
-    SMART attributes — the tool renders both formats automatically.
-
-    Returns:
-        str: Markdown summary (and attributes if available) or JSON.
+    For NVMe devices Proxmox returns NVMe-style fields instead of classic
+    SMART attributes — both formats are rendered automatically.
     """
     cfg = require_config()
     if cfg:
@@ -202,7 +197,7 @@ async def proxmox_get_disk_smart(params: DiskSmartInput) -> str:
         return http_client.format_http_error(exc)
 
     if params.response_format == ResponseFormat.JSON:
-        return compact_json(data)
+        return compact_json(data, fields=params.fields)
 
     if not data:
         return f"_No SMART data available for `{params.disk}`._"

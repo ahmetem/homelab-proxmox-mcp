@@ -83,12 +83,49 @@ def truncate(s: str, limit: int = 8000) -> str:
     return s[:limit] + f"\n\n... [truncated, total {len(s)} chars]"
 
 
-def compact_json(obj: Any, limit: int = 8000) -> str:
+def project_fields(obj: Any, fields: Any) -> Any:
+    """Keep only `fields` keys in a dict (or in each dict of a list). Non-dict
+    values and empty/None `fields` pass through unchanged. Unknown field names
+    simply match nothing, so a typo yields empty objects rather than an error."""
+    if not fields:
+        return obj
+    if isinstance(obj, list):
+        return [project_fields(o, fields) for o in obj]
+    if isinstance(obj, dict):
+        return {k: v for k, v in obj.items() if k in fields}
+    return obj
+
+
+def compact_json(obj: Any, limit: int = 8000, fields: Any = None) -> str:
     """Serialize `obj` to compact JSON (no indent whitespace) and hard-cap the
     length. Used by the opt-in `response_format=json` branches.
 
-    Compact separators drop ~30-40% of the bytes vs `indent=2` while staying
-    valid JSON; the length cap is a safety net for an unexpectedly huge payload
-    (truncation there yields invalid JSON, but that only triggers on
-    pathologically large output that would otherwise flood the context)."""
-    return truncate(json.dumps(obj, separators=(",", ":"), default=str), limit)
+    Compact separators drop ~30-40% of the bytes vs `indent=2`. `fields`
+    optionally projects dicts (or list items) down to the given keys first.
+
+    Over-limit lists are truncated at the *item* level so the output stays
+    valid JSON: items are dropped from the end and a final
+    `{"_truncated_items": N}` marker records how many were cut. Only a
+    non-list payload that alone exceeds the limit falls back to a hard
+    (invalid-JSON) string cap."""
+    obj = project_fields(obj, fields)
+
+    def dumps(o: Any) -> str:
+        return json.dumps(o, separators=(",", ":"), default=str)
+
+    s = dumps(obj)
+    if len(s) <= limit:
+        return s
+
+    if isinstance(obj, list) and len(obj) > 1:
+        # First guess proportionally, then halve until it fits.
+        keep = max(1, int(len(obj) * limit / len(s)))
+        while keep >= 1:
+            out = dumps(obj[:keep] + [{"_truncated_items": len(obj) - keep}])
+            if len(out) <= limit:
+                return out
+            if keep == 1:
+                break
+            keep //= 2
+
+    return truncate(s, limit)

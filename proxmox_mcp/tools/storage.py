@@ -52,11 +52,7 @@ class StorageUsageDetailInput(BaseModel):
     },
 )
 async def proxmox_list_storage(params: NodeInput) -> str:
-    """List storage pools on a node with usage information.
-
-    Returns:
-        str: For each storage: name, type, usage, content types.
-    """
+    """List storage pools on a node with usage information."""
     cfg = require_config()
     if cfg:
         return cfg
@@ -66,7 +62,7 @@ async def proxmox_list_storage(params: NodeInput) -> str:
         return http_client.format_http_error(exc)
 
     if params.response_format == ResponseFormat.JSON:
-        return compact_json(storages)
+        return compact_json(storages, fields=params.fields)
 
     if not storages:
         return "_No storage pools found._"
@@ -103,14 +99,8 @@ async def proxmox_storage_usage_detail(params: StorageUsageDetailInput) -> str:
     investigating sudden growth, or deciding what to prune. Pairs well
     with `proxmox_list_storage` (which gives the aggregate usage).
 
-    Each item from /nodes/{node}/storage/{storage}/content is grouped by
-    its `content` field. Item sizes come straight from the API — for
-    PBS-backed storages this is logical (pre-dedup) size, not on-disk
-    chunk-store size.
-
-    Returns:
-        str: Markdown report with two sections — summary table by
-             content type, and top-N items by size.
+    Item sizes come straight from the API — for PBS-backed storages this is
+    logical (pre-dedup) size, not on-disk chunk-store size.
     """
     cfg = require_config()
     if cfg:

@@ -4,18 +4,17 @@ Backed by Proxmox REST endpoints:
   - GET    /storage              -> list all storage entries
   - POST   /storage              -> create
   - DELETE /storage/{storage}    -> remove (does NOT delete data)
-  - PUT    /storage/{storage}    -> update flags (enable/disable, content types)
 
 These manage the *cluster-wide* /etc/pve/storage.cfg entries, not the
-per-node disk pools themselves. proxmox_create_lvm_vg / proxmox_create_zfs_pool
-already accept add_storage=true to do this in one shot; these tools are for
+per-node disk pools themselves. proxmox_lvm_manage / proxmox_zfs_pool_manage
+already accept add_storage=true to do this in one shot; this tool is for
 attaching pre-existing pools or for cleanup.
 """
 from __future__ import annotations
 
 from typing import Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from proxmox_mcp import http_client
 from proxmox_mcp.config import require_config
@@ -27,50 +26,57 @@ from proxmox_mcp.models import FormatInput, ResponseFormat
 _STORAGE_ID = r"^[A-Za-z][A-Za-z0-9_.-]*$"
 
 
-class StorageAddZfsInput(BaseModel):
+class StorageConfigInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
+    action: str = Field(
+        ...,
+        description=(
+            "'add_zfs' registers an existing ZFS pool, 'add_dir' registers a "
+            "filesystem directory, 'remove' deletes the config entry (data is "
+            "NOT touched). All require confirm=true."
+        ),
+        pattern="^(add_zfs|add_dir|remove)$",
+    )
     storage: str = Field(
-        ..., description="Storage ID to expose in PVE (alphanumeric, dot, dash, underscore).",
+        ..., description="Storage ID in PVE.",
         min_length=1, max_length=64, pattern=_STORAGE_ID,
     )
-    pool: str = Field(
-        ..., description="Existing ZFS pool (or pool/dataset path) to expose.",
-        min_length=1, max_length=128,
+    pool: Optional[str] = Field(
+        default=None,
+        description="add_zfs only: existing ZFS pool (or pool/dataset) to expose.",
+        max_length=128,
     )
-    content: str = Field(
-        default="rootdir,images",
+    path: Optional[str] = Field(
+        default=None,
+        description="add_dir only: absolute path on the node.",
+        max_length=256, pattern=r"^/[A-Za-z0-9/_.+-]+$",
+    )
+    content: Optional[str] = Field(
+        default=None,
         description=(
-            "Comma-separated content types this storage accepts. "
-            "Typical for ZFS: 'rootdir,images'."
+            "Comma-separated content types. Defaults: add_zfs → "
+            "'rootdir,images', add_dir → 'iso,vztmpl,backup'."
         ),
         max_length=128,
     )
-    sparse: bool = Field(default=True, description="Use sparse zvols (thin provisioning).")
+    sparse: bool = Field(
+        default=True, description="add_zfs only: sparse zvols (thin provisioning)."
+    )
     nodes: Optional[str] = Field(
         default=None,
         description="Optional comma-separated node restriction (default: all nodes).",
         max_length=256,
     )
     confirm: bool = Field(default=False)
-
-
-class StorageAddDirInput(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    storage: str = Field(..., min_length=1, max_length=64, pattern=_STORAGE_ID)
-    path: str = Field(
-        ..., description="Absolute path on the node hosting the storage.",
-        min_length=1, max_length=256, pattern=r"^/[A-Za-z0-9/_.+-]+$",
-    )
-    content: str = Field(default="iso,vztmpl,backup", max_length=128)
-    nodes: Optional[str] = Field(default=None, max_length=256)
-    confirm: bool = Field(default=False)
-
-
-class StorageRemoveInput(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    storage: str = Field(..., min_length=1, max_length=64, pattern=_STORAGE_ID)
-    confirm: bool = Field(default=False)
     reason: Optional[str] = Field(default=None, max_length=200)
+
+    @model_validator(mode="after")
+    def _check_required(self):
+        if self.action == "add_zfs" and not self.pool:
+            raise ValueError("action='add_zfs' requires 'pool'.")
+        if self.action == "add_dir" and not self.path:
+            raise ValueError("action='add_dir' requires 'path'.")
+        return self
 
 
 @mcp.tool(
@@ -82,11 +88,9 @@ class StorageRemoveInput(BaseModel):
     },
 )
 async def proxmox_list_cluster_storage(params: FormatInput = FormatInput()) -> str:
-    """List all storage entries defined in the cluster configuration.
-
-    This is /etc/pve/storage.cfg — what is *defined*, not what is *active*
-    on a specific node (use proxmox_list_storage for that).
-    """
+    """List all storage entries defined in the cluster configuration
+    (/etc/pve/storage.cfg — what is *defined*; use proxmox_list_storage for
+    what is *active* on a node)."""
     cfg = require_config()
     if cfg:
         return cfg
@@ -96,7 +100,7 @@ async def proxmox_list_cluster_storage(params: FormatInput = FormatInput()) -> s
         return http_client.format_http_error(exc)
 
     if params.response_format == ResponseFormat.JSON:
-        return compact_json(items)
+        return compact_json(items, fields=params.fields)
 
     if not items:
         return "_No cluster storage entries defined._"
@@ -121,19 +125,20 @@ async def proxmox_list_cluster_storage(params: FormatInput = FormatInput()) -> s
 
 
 @mcp.tool(
-    name="proxmox_add_zfs_storage",
+    name="proxmox_storage_config",
     annotations={
-        "title": "Register Existing ZFS Pool as PVE Storage",
-        "readOnlyHint": False, "destructiveHint": False,
+        "title": "Add / Remove Cluster Storage Entry",
+        "readOnlyHint": False, "destructiveHint": True,
         "idempotentHint": False, "openWorldHint": True,
     },
 )
-async def proxmox_add_zfs_storage(params: StorageAddZfsInput) -> str:
-    """Register an existing ZFS pool as a Proxmox storage entry.
+async def proxmox_storage_config(params: StorageConfigInput) -> str:
+    """Add or remove a cluster storage configuration entry.
 
-    Use this when a pool exists (created outside of PVE, or imported) but
-    isn't visible in PVE yet. If you created the pool with
-    proxmox_create_zfs_pool and add_storage=true, you do NOT need this.
+    add_zfs: expose an existing ZFS pool (not needed if the pool was created
+    with add_storage=true). add_dir: expose a directory for ISO/template/
+    backup content. remove: delete only the PVE storage record — the
+    underlying pool/directory and its data are NOT touched.
 
     Requires confirm=true.
     """
@@ -141,75 +146,31 @@ async def proxmox_add_zfs_storage(params: StorageAddZfsInput) -> str:
     if cfg:
         return cfg
     if not params.confirm:
-        return missing_confirm("proxmox_add_zfs_storage")
-
-    payload = {
-        "storage": params.storage, "type": "zfspool", "pool": params.pool,
-        "content": params.content, "sparse": 1 if params.sparse else 0,
-    }
-    if params.nodes:
-        payload["nodes"] = params.nodes
+        return missing_confirm(f"proxmox_storage_config (action={params.action})")
 
     try:
+        if params.action == "remove":
+            await http_client.delete(f"/storage/{params.storage}")
+            return (
+                f"OK: Storage entry '{params.storage}' removed. "
+                "Underlying data was NOT touched."
+            )
+        if params.action == "add_zfs":
+            payload = {
+                "storage": params.storage, "type": "zfspool", "pool": params.pool,
+                "content": params.content or "rootdir,images",
+                "sparse": 1 if params.sparse else 0,
+            }
+            desc = f"type=zfspool, pool={params.pool}"
+        else:  # add_dir
+            payload = {
+                "storage": params.storage, "type": "dir", "path": params.path,
+                "content": params.content or "iso,vztmpl,backup",
+            }
+            desc = f"type=dir, path={params.path}"
+        if params.nodes:
+            payload["nodes"] = params.nodes
         result = await http_client.post("/storage", data=payload)
     except Exception as exc:
         return http_client.format_http_error(exc)
-    return f"OK: Storage '{params.storage}' (type=zfspool, pool={params.pool}) registered. Response: {result}"
-
-
-@mcp.tool(
-    name="proxmox_add_dir_storage",
-    annotations={
-        "title": "Register Directory as PVE Storage",
-        "readOnlyHint": False, "destructiveHint": False,
-        "idempotentHint": False, "openWorldHint": True,
-    },
-)
-async def proxmox_add_dir_storage(params: StorageAddDirInput) -> str:
-    """Register a filesystem directory as a Proxmox storage entry.
-
-    Useful for ISO / template / backup storage on top of mounted FS or
-    a ZFS dataset. Requires confirm=true.
-    """
-    cfg = require_config()
-    if cfg:
-        return cfg
-    if not params.confirm:
-        return missing_confirm("proxmox_add_dir_storage")
-
-    payload = {"storage": params.storage, "type": "dir", "path": params.path, "content": params.content}
-    if params.nodes:
-        payload["nodes"] = params.nodes
-
-    try:
-        result = await http_client.post("/storage", data=payload)
-    except Exception as exc:
-        return http_client.format_http_error(exc)
-    return f"OK: Directory storage '{params.storage}' at `{params.path}` registered. Response: {result}"
-
-
-@mcp.tool(
-    name="proxmox_remove_storage",
-    annotations={
-        "title": "Remove Storage Configuration Entry",
-        "readOnlyHint": False, "destructiveHint": True,
-        "idempotentHint": True, "openWorldHint": True,
-    },
-)
-async def proxmox_remove_storage(params: StorageRemoveInput) -> str:
-    """Remove a storage entry from the cluster configuration.
-
-    This only deletes the PVE storage record — the underlying pool, VG,
-    or directory and its data are NOT touched. Requires confirm=true.
-    """
-    cfg = require_config()
-    if cfg:
-        return cfg
-    if not params.confirm:
-        return missing_confirm("proxmox_remove_storage")
-
-    try:
-        await http_client.delete(f"/storage/{params.storage}")
-    except Exception as exc:
-        return http_client.format_http_error(exc)
-    return f"OK: Storage entry '{params.storage}' removed. Underlying data was NOT touched."
+    return f"OK: Storage '{params.storage}' ({desc}) registered. Response: {result}"

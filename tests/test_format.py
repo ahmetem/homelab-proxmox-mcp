@@ -13,7 +13,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from proxmox_mcp.format import compact_json, truncate  # noqa: E402
+from proxmox_mcp.format import compact_json, project_fields, truncate  # noqa: E402
 
 
 def test_truncate_passthrough_under_limit():
@@ -64,6 +64,42 @@ def test_compact_json_hard_caps_large_payload():
     out = compact_json(obj)
     assert len(out) < 8100
     assert "truncated" in out
+
+
+def test_compact_json_truncated_list_stays_valid_json():
+    obj = [{"i": i, "blob": "z" * 50} for i in range(20_000)]
+    out = compact_json(obj)
+    parsed = json.loads(out)  # must not raise
+    assert isinstance(parsed, list)
+    # Marker records exactly how many items were cut.
+    marker = parsed[-1]
+    assert set(marker) == {"_truncated_items"}
+    assert len(parsed) - 1 + marker["_truncated_items"] == 20_000
+    # Kept items are unmodified.
+    assert parsed[0] == obj[0]
+
+
+def test_compact_json_huge_single_dict_falls_back_to_hard_cap():
+    obj = {"blob": "z" * 50_000}
+    out = compact_json(obj)
+    assert len(out) < 8100
+    assert "truncated" in out
+
+
+def test_project_fields_filters_dicts_and_lists():
+    obj = [{"vmid": 101, "name": "a", "cpu": 0.1}, {"vmid": 102, "name": "b"}]
+    assert project_fields(obj, ["vmid"]) == [{"vmid": 101}, {"vmid": 102}]
+    assert project_fields({"a": 1, "b": 2}, ["b"]) == {"b": 2}
+    # None / empty pass through; non-dicts untouched.
+    assert project_fields(obj, None) == obj
+    assert project_fields(obj, []) == obj
+    assert project_fields("text", ["x"]) == "text"
+
+
+def test_compact_json_applies_fields_projection():
+    obj = [{"vmid": i, "name": f"g{i}", "blob": "z" * 100} for i in range(5)]
+    out = compact_json(obj, fields=["vmid"])
+    assert json.loads(out) == [{"vmid": i} for i in range(5)]
 
 
 def test_compact_json_default_str_fallback():

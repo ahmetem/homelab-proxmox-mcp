@@ -17,7 +17,6 @@ from proxmox_mcp.tools import (  # noqa: F401
     zfs_manage,
     storage_manage,
     # Phase 2.5 (SSH-backed: bypass API token restrictions + dataset/snapshot ops)
-    ssh_disks,
     ssh_zfs,
     # Phase 3 (VM disk movement / clone / ISO listing + ZFS get/status/scrub/send)
     vm_disk,
@@ -34,4 +33,6 @@ from proxmox_mcp.tools import (  # noqa: F401
     # Phase 7 (read-only forensics + narrow backup self-heal)
     diag_read,
     backup_maint,
+    # Phase 8 (single-call health summary)
+    overview,
 )

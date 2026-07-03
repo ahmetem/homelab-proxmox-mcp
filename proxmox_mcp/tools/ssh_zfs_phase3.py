@@ -21,11 +21,24 @@ from proxmox_mcp.format import (
 )
 from proxmox_mcp.mcp_instance import mcp
 from proxmox_mcp.models import ResponseFormat
-from proxmox_mcp.tools.ssh_zfs import _validate_dataset, _validate_snapname
+from proxmox_mcp.tools.ssh_zfs import (
+    ALLOWED_ZFS_PROPS,
+    _PROP_VALUE_RE,
+    _validate_dataset,
+    _validate_snapname,
+)
 
 
-class ZfsGetPropertyInput(BaseModel):
+class ZfsPropertyInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
+    action: str = Field(
+        default="get",
+        description=(
+            "'get' reads one/all properties (no confirm). 'set' writes an "
+            "allow-listed property (confirm=true; requires 'value')."
+        ),
+        pattern="^(get|set)$",
+    )
     name: str = Field(
         ...,
         description="Dataset, snapshot, or pool name.",
@@ -34,12 +47,18 @@ class ZfsGetPropertyInput(BaseModel):
     property: str = Field(
         default="all",
         description=(
-            "Property name to read, or 'all' for everything. Examples: "
+            "Property name; for get, 'all' returns everything. Examples: "
             "'compressratio', 'used', 'recordsize', 'available'."
         ),
         min_length=1, max_length=64,
         pattern=r"^[a-z][a-z0-9:_-]*$",
     )
+    value: Optional[str] = Field(
+        default=None,
+        description="set only: new value (strict charset, no spaces/quotes).",
+        max_length=128,
+    )
+    confirm: bool = Field(default=False, description="Required for action='set'.")
     response_format: ResponseFormat = Field(default=ResponseFormat.MARKDOWN)
 
     @field_validator("name")
@@ -53,6 +72,13 @@ class ZfsGetPropertyInput(BaseModel):
         err = _validate_dataset(v)
         if err:
             raise ValueError(err)
+        return v
+
+    @field_validator("value")
+    @classmethod
+    def _v_val(cls, v):
+        if v is not None and not _PROP_VALUE_RE.fullmatch(v):
+            raise ValueError("value contains disallowed characters.")
         return v
 
 
@@ -189,24 +215,44 @@ class ZfsSendInput(BaseModel):
 
 
 @mcp.tool(
-    name="proxmox_zfs_get_property",
+    name="proxmox_zfs_property",
     annotations={
-        "title": "Get ZFS Property",
-        "readOnlyHint": True, "destructiveHint": False,
+        "title": "Get / Set ZFS Property",
+        "readOnlyHint": False, "destructiveHint": False,
         "idempotentHint": True, "openWorldHint": True,
     },
 )
-async def proxmox_zfs_get_property(params: ZfsGetPropertyInput) -> str:
-    """Read one or all properties of a dataset, snapshot, or pool.
+async def proxmox_zfs_property(params: ZfsPropertyInput) -> str:
+    """Read or write ZFS properties of a dataset, snapshot, or pool.
 
-    Examples:
-      - name='nvmepool', property='compressratio'
-      - name='nvmepool/test', property='all'
-      - name='nvmepool@daily', property='used'
+    get (default, no confirm): property='all' or a single name, e.g.
+    name='nvmepool', property='compressratio'.
+
+    set (confirm=true): only allow-listed properties; value uses a strict
+    character set. E.g. property='atime', value='off'.
     """
     cfg_err = require_ssh()
     if cfg_err:
         return cfg_err
+
+    if params.action == "set":
+        if not params.confirm:
+            return missing_confirm("proxmox_zfs_property (action=set)")
+        if params.value is None:
+            return "Error: action='set' requires 'value'."
+        if params.property not in ALLOWED_ZFS_PROPS:
+            return (
+                f"Refused: property {params.property!r} is not allow-listed. "
+                f"Allowed: {sorted(ALLOWED_ZFS_PROPS)}"
+            )
+        argv = ["zfs", "set", f"{params.property}={params.value}", params.name]
+        try:
+            rc, out, err = await ssh.run_command(argv)
+        except ssh.SshError as exc:
+            return ssh.format_ssh_error(exc)
+        if rc != 0:
+            return f"Error: zfs set failed (rc={rc}).\nstderr: {err.strip()}"
+        return f"OK: Set `{params.property}={params.value}` on `{params.name}`."
 
     argv = ["zfs", "get", "-H", "-p", "-o", "property,value,source",
             params.property, params.name]

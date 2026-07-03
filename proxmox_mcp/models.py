@@ -12,6 +12,17 @@ class ResponseFormat(str, Enum):
     JSON = "json"
 
 
+FIELDS_DESC = (
+    "JSON mode only: return only these keys per object (e.g. "
+    "['vmid','name','status']). Cuts output size drastically."
+)
+
+WAIT_DESC = (
+    "Poll the started task up to this many seconds and report its final "
+    "state inline (0 = return immediately with the task ID)."
+)
+
+
 class EmptyInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -22,6 +33,7 @@ class FormatInput(BaseModel):
         default=ResponseFormat.MARKDOWN,
         description="Output format: 'markdown' or 'json'.",
     )
+    fields: Optional[list[str]] = Field(default=None, description=FIELDS_DESC)
 
 
 class NodeInput(BaseModel):
@@ -31,6 +43,7 @@ class NodeInput(BaseModel):
         default=ResponseFormat.MARKDOWN,
         description="Output format: 'markdown' or 'json'.",
     )
+    fields: Optional[list[str]] = Field(default=None, description=FIELDS_DESC)
 
 
 class VMInput(BaseModel):
@@ -46,47 +59,106 @@ class VMInput(BaseModel):
         default=ResponseFormat.MARKDOWN,
         description="Output format: 'markdown' or 'json'.",
     )
+    fields: Optional[list[str]] = Field(default=None, description=FIELDS_DESC)
 
 
-class VMActionInput(BaseModel):
+class VMListInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    node: Optional[str] = Field(
+        default=None, description="Only guests on this node.", max_length=64
+    )
+    vmid: Optional[int] = Field(
+        default=None, description="Only this VMID.", ge=100, le=999999999
+    )
+    status: Optional[str] = Field(
+        default=None,
+        description="Only guests in this state.",
+        pattern="^(running|stopped)$",
+    )
+    guest_type: Optional[str] = Field(
+        default=None,
+        description="Only 'qemu' VMs or 'lxc' containers.",
+        pattern="^(qemu|lxc)$",
+    )
+    response_format: ResponseFormat = Field(
+        default=ResponseFormat.MARKDOWN,
+        description="Output format: 'markdown' or 'json'.",
+    )
+    fields: Optional[list[str]] = Field(default=None, description=FIELDS_DESC)
+
+
+class VMPowerInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
     node: str = Field(..., description="Node name", min_length=1)
     vmid: int = Field(..., description="VM or container ID", ge=100)
+    action: str = Field(
+        ...,
+        description=(
+            "Power action: 'start', 'shutdown' (graceful ACPI), 'stop' "
+            "(force, may lose data), 'reboot'."
+        ),
+        pattern="^(start|shutdown|stop|reboot)$",
+    )
     vm_type: str = Field(
-        default="qemu", description="VM type", pattern="^(qemu|lxc)$"
+        default="qemu", description="VM type (auto-corrected)", pattern="^(qemu|lxc)$"
     )
     confirm: bool = Field(
         default=False,
         description="Must be true to execute. Only set after explicit user confirmation.",
     )
+    wait_seconds: int = Field(default=0, ge=0, le=600, description=WAIT_DESC)
     reason: Optional[str] = Field(
         default=None, description="Optional note about why", max_length=200
     )
 
 
-class SnapshotCreateInput(BaseModel):
+class SnapshotManageInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
+    action: str = Field(
+        ...,
+        description=(
+            "'create' (confirm), 'rollback' (confirm; state after snapshot is "
+            "lost), 'delete' (confirm + i_understand_data_loss)."
+        ),
+        pattern="^(create|rollback|delete)$",
+    )
     node: str = Field(..., min_length=1)
     vmid: int = Field(..., ge=100)
     vm_type: str = Field(default="qemu", pattern="^(qemu|lxc)$")
     snapname: str = Field(
         ...,
-        description="Snapshot name (alphanumeric, dash, underscore)",
+        description="Snapshot name (letter first; alphanumeric, dash, underscore).",
         min_length=1,
         max_length=40,
         pattern=r"^[A-Za-z][A-Za-z0-9_-]*$",
     )
-    description: Optional[str] = Field(default=None, max_length=200)
+    description: Optional[str] = Field(
+        default=None, description="Only for action='create'.", max_length=200
+    )
+    force: bool = Field(
+        default=False,
+        description="Only for action='delete': force removal even with dangling references.",
+    )
     confirm: bool = Field(default=False)
+    i_understand_data_loss: bool = Field(
+        default=False, description="Required for action='delete'."
+    )
+    wait_seconds: int = Field(default=0, ge=0, le=600, description=WAIT_DESC)
+    reason: Optional[str] = Field(default=None, max_length=200)
 
 
-class SnapshotRollbackInput(BaseModel):
+class BackupListInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
     node: str = Field(..., min_length=1)
-    vmid: int = Field(..., ge=100)
-    vm_type: str = Field(default="qemu", pattern="^(qemu|lxc)$")
-    snapname: str = Field(..., min_length=1, max_length=40)
-    confirm: bool = Field(default=False)
+    storage: str = Field(default="local", description="Storage name")
+    vmid: Optional[int] = Field(
+        default=None, description="Only backups of this VMID.", ge=100
+    )
+    limit: int = Field(
+        default=50, description="Newest N backups to show.", ge=1, le=1000
+    )
+    response_format: ResponseFormat = Field(default=ResponseFormat.MARKDOWN)
+    fields: Optional[list[str]] = Field(default=None, description=FIELDS_DESC)
 
 
 class BackupCreateInput(BaseModel):
@@ -105,6 +177,7 @@ class BackupCreateInput(BaseModel):
         pattern="^(none|lzo|gzip|zstd)$",
     )
     confirm: bool = Field(default=False)
+    wait_seconds: int = Field(default=0, ge=0, le=600, description=WAIT_DESC)
 
 
 class BackupRestoreInput(BaseModel):
@@ -165,6 +238,7 @@ class BackupRestoreInput(BaseModel):
             "existing guest's disks are destroyed."
         ),
     )
+    wait_seconds: int = Field(default=0, ge=0, le=600, description=WAIT_DESC)
     reason: Optional[str] = Field(default=None, max_length=200)
 
 
@@ -194,10 +268,3 @@ class VMResizeInput(BaseModel):
     reason: Optional[str] = Field(
         default=None, description="Optional note about why", max_length=200
     )
-
-
-class StorageInput(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    node: str = Field(..., min_length=1)
-    storage: str = Field(default="local", description="Storage name")
-    response_format: ResponseFormat = Field(default=ResponseFormat.MARKDOWN)

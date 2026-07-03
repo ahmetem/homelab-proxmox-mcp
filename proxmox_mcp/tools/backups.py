@@ -14,9 +14,9 @@ from proxmox_mcp.format import (
 from proxmox_mcp.mcp_instance import mcp
 from proxmox_mcp.models import (
     BackupCreateInput,
+    BackupListInput,
     BackupRestoreInput,
     ResponseFormat,
-    StorageInput,
 )
 
 
@@ -30,11 +30,10 @@ from proxmox_mcp.models import (
         "openWorldHint": True,
     },
 )
-async def proxmox_list_backups(params: StorageInput) -> str:
-    """List backup files on a storage.
+async def proxmox_list_backups(params: BackupListInput) -> str:
+    """List backup files on a storage, newest first.
 
-    Returns:
-        str: For each backup: filename, VMID, size, creation time.
+    Optional filters: vmid (one guest only), limit (newest N, default 50).
     """
     cfg = require_config()
     if cfg:
@@ -47,14 +46,26 @@ async def proxmox_list_backups(params: StorageInput) -> str:
     except Exception as exc:
         return http_client.format_http_error(exc)
 
+    backups = [
+        b for b in (backups or [])
+        if params.vmid is None or b.get("vmid") == params.vmid
+    ]
+    backups = sorted(backups, key=lambda x: x.get("ctime", 0), reverse=True)
+    total = len(backups)
+    backups = backups[: params.limit]
+
     if params.response_format == ResponseFormat.JSON:
-        return compact_json(backups)
+        return compact_json(backups, fields=params.fields)
 
     if not backups:
-        return f"_No backups on `{params.storage}`._"
+        scope = f" for VM {params.vmid}" if params.vmid else ""
+        return f"_No backups on `{params.storage}`{scope}._"
 
     lines = [f"## Backups on `{params.storage}` (node `{params.node}`)", ""]
-    for b in sorted(backups, key=lambda x: x.get("ctime", 0), reverse=True):
+    if total > len(backups):
+        lines.append(f"_Showing newest {len(backups)} of {total}._")
+        lines.append("")
+    for b in backups:
         volid = b.get("volid", "?")
         size = fmt_bytes(b.get("size", 0))
         vmid = b.get("vmid", "?")
@@ -78,14 +89,10 @@ async def proxmox_list_backups(params: StorageInput) -> str:
     },
 )
 async def proxmox_create_backup(params: BackupCreateInput) -> str:
-    """Create a backup of a VM/container. Requires confirm=true.
+    """Create a backup (vzdump) of a VM/container. Requires confirm=true.
 
-    Modes:
-      - snapshot: quick backup using snapshots (minimal downtime, recommended)
-      - suspend: suspends VM during backup (consistency)
-      - stop: stops VM during backup (max consistency, max downtime)
-
-    Compression: none, lzo, gzip, zstd (zstd recommended)
+    Modes: snapshot (minimal downtime, recommended), suspend, stop.
+    Set wait_seconds>0 to poll the backup task and report the result inline.
     """
     cfg = require_config()
     if cfg:
@@ -102,11 +109,13 @@ async def proxmox_create_backup(params: BackupCreateInput) -> str:
         task_id = await http_client.post(f"/nodes/{params.node}/vzdump", data=payload)
     except Exception as exc:
         return http_client.format_http_error(exc)
+    suffix = await http_client.wait_for_task(params.node, task_id, params.wait_seconds)
+    if not suffix:
+        suffix = " Backup runs in background; use proxmox_list_backups to verify."
     return (
         f"OK: Backup of VM {params.vmid} started on storage "
         f"`{params.storage}` (mode={params.mode}, compress={params.compress}). "
-        f"Task: {task_id}. Backup runs in background; "
-        "use proxmox_list_backups to verify completion."
+        f"Task: {task_id}.{suffix}"
     )
 
 
@@ -123,17 +132,9 @@ async def proxmox_create_backup(params: BackupCreateInput) -> str:
 async def proxmox_restore_backup(params: BackupRestoreInput) -> str:
     """Restore a VM or LXC container from a backup archive.
 
-    Two flavors depending on vm_type:
-      - qemu: POST /nodes/{node}/qemu with `archive` parameter
-      - lxc : POST /nodes/{node}/lxc  with `ostemplate=<archive>` + `restore=1`
-
     Refuses to overwrite an existing VMID unless force=true AND
-    i_understand_data_loss=true. Overwrite destroys the current guest's
-    disks before restore.
-
-    Requires confirm=true. Restore runs in the background; the returned
-    task ID lets you track progress via Proxmox web UI or
-    `proxmox_get_vm_status` once complete.
+    i_understand_data_loss=true (overwrite destroys the current guest's disks
+    first). Requires confirm=true. Set wait_seconds>0 to poll the restore task.
     """
     cfg = require_config()
     if cfg:
@@ -166,19 +167,13 @@ async def proxmox_restore_backup(params: BackupRestoreInput) -> str:
             "overwrite, or pick a different vmid."
         )
 
-    # Build the payload. The qemu and lxc endpoints differ in parameter
-    # names — qemu uses `archive`, lxc uses `ostemplate` + `restore=1`.
+    # The qemu and lxc endpoints differ in parameter names — qemu uses
+    # `archive`, lxc uses `ostemplate` + `restore=1`.
     if params.vm_type == "qemu":
         payload: dict = {
             "vmid": params.vmid,
             "archive": params.archive,
         }
-        if params.force:
-            payload["force"] = 1
-        if params.storage:
-            payload["storage"] = params.storage
-        if params.start_after_restore:
-            payload["start"] = 1
         endpoint = f"/nodes/{params.node}/qemu"
     else:  # lxc
         payload = {
@@ -186,13 +181,13 @@ async def proxmox_restore_backup(params: BackupRestoreInput) -> str:
             "ostemplate": params.archive,
             "restore": 1,
         }
-        if params.force:
-            payload["force"] = 1
-        if params.storage:
-            payload["storage"] = params.storage
-        if params.start_after_restore:
-            payload["start"] = 1
         endpoint = f"/nodes/{params.node}/lxc"
+    if params.force:
+        payload["force"] = 1
+    if params.storage:
+        payload["storage"] = params.storage
+    if params.start_after_restore:
+        payload["start"] = 1
 
     try:
         task_id = await http_client.post(endpoint, data=payload)
@@ -200,10 +195,12 @@ async def proxmox_restore_backup(params: BackupRestoreInput) -> str:
         return http_client.format_http_error(exc)
 
     note = "overwriting existing guest" if existing is not None else "fresh restore"
+    suffix = await http_client.wait_for_task(params.node, task_id, params.wait_seconds)
+    if not suffix:
+        suffix = (
+            " Restore runs in background; large guests can take many minutes."
+        )
     return (
         f"OK: {params.vm_type.upper()} restore of VMID {params.vmid} "
-        f"started from `{params.archive}` ({note}). "
-        f"Task: {task_id}. Restore runs in background; for large guests "
-        "this can take many minutes. Track via Proxmox web UI or "
-        "proxmox_get_vm_status once complete."
+        f"started from `{params.archive}` ({note}). Task: {task_id}.{suffix}"
     )

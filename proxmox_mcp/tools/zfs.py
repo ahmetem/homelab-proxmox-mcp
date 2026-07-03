@@ -74,9 +74,6 @@ async def proxmox_list_zfs(params: NodeInput) -> str:
     """List ZFS pools on a node with size, free space, dedup ratio, and health.
 
     For per-pool vdev breakdown and error counters, use proxmox_get_zfs_pool.
-
-    Returns:
-        str: Markdown table or JSON list of pools.
     """
     cfg = require_config()
     if cfg:
@@ -88,7 +85,7 @@ async def proxmox_list_zfs(params: NodeInput) -> str:
         return http_client.format_http_error(exc)
 
     if params.response_format == ResponseFormat.JSON:
-        return compact_json(pools)
+        return compact_json(pools, fields=params.fields)
 
     if not pools:
         return f"_No ZFS pools on `{params.node}`._"
@@ -128,14 +125,8 @@ async def proxmox_list_zfs(params: NodeInput) -> str:
     },
 )
 async def proxmox_get_zfs_pool(params: ZfsPoolInput) -> str:
-    """Show vdev tree and per-device error counters for a single ZFS pool.
-
-    Read/Write/Checksum (R/W/CK) error counts are shown next to each device.
-    Any non-ONLINE state is flagged.
-
-    Returns:
-        str: Markdown tree of vdevs, or JSON.
-    """
+    """Show vdev tree and per-device R/W/checksum error counters for a
+    single ZFS pool. Any non-ONLINE state is flagged."""
     cfg = require_config()
     if cfg:
         return cfg

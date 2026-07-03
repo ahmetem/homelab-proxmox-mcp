@@ -91,8 +91,16 @@ def _validate_snapname(name: str) -> Optional[str]:
     return None
 
 
-class ZfsCreateDatasetInput(BaseModel):
+class ZfsDatasetInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
+    action: str = Field(
+        ...,
+        description=(
+            "'create' (confirm) or 'destroy' (confirm; recursive destroy also "
+            "needs i_understand_data_loss)."
+        ),
+        pattern="^(create|destroy)$",
+    )
     name: str = Field(
         ...,
         description="Full dataset path, e.g. 'nvmepool/data' or 'nvmepool/vm/lxc'.",
@@ -101,16 +109,21 @@ class ZfsCreateDatasetInput(BaseModel):
     )
     parents: bool = Field(
         default=False,
-        description="Create missing parent datasets (zfs create -p).",
+        description="create only: create missing parent datasets (zfs create -p).",
     )
     properties: Optional[dict[str, str]] = Field(
         default=None,
         description=(
-            "Optional ZFS properties to set at creation, e.g. "
+            "create only: ZFS properties to set at creation, e.g. "
             "{'compression': 'lz4', 'atime': 'off'}."
         ),
     )
+    recursive: bool = Field(
+        default=False,
+        description="destroy only: destroy children and snapshots too (zfs destroy -r).",
+    )
     confirm: bool = Field(default=False)
+    i_understand_data_loss: bool = Field(default=False)
     reason: Optional[str] = Field(default=None, max_length=200)
 
     @field_validator("name")
@@ -138,60 +151,6 @@ class ZfsCreateDatasetInput(BaseModel):
                 raise ValueError(
                     f"Property value for {k!r} contains disallowed characters."
                 )
-        return v
-
-
-class ZfsDestroyDatasetInput(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    name: str = Field(..., min_length=1, max_length=256)
-    recursive: bool = Field(
-        default=False,
-        description="Destroy children and snapshots too (zfs destroy -r).",
-    )
-    confirm: bool = Field(default=False)
-    i_understand_data_loss: bool = Field(default=False)
-    reason: Optional[str] = Field(default=None, max_length=200)
-
-    @field_validator("name")
-    @classmethod
-    def _v_name(cls, v: str) -> str:
-        err = _validate_dataset(v)
-        if err:
-            raise ValueError(err)
-        return v
-
-
-class ZfsSetPropertyInput(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    name: str = Field(..., min_length=1, max_length=256)
-    property: str = Field(..., min_length=1, max_length=64)
-    value: str = Field(..., min_length=1, max_length=128)
-    confirm: bool = Field(default=False)
-    reason: Optional[str] = Field(default=None, max_length=200)
-
-    @field_validator("name")
-    @classmethod
-    def _v_name(cls, v: str) -> str:
-        err = _validate_dataset(v)
-        if err:
-            raise ValueError(err)
-        return v
-
-    @field_validator("property")
-    @classmethod
-    def _v_prop(cls, v: str) -> str:
-        if v not in ALLOWED_ZFS_PROPS:
-            raise ValueError(
-                f"Property {v!r} is not allow-listed. "
-                f"Allowed: {sorted(ALLOWED_ZFS_PROPS)}"
-            )
-        return v
-
-    @field_validator("value")
-    @classmethod
-    def _v_val(cls, v: str) -> str:
-        if not _PROP_VALUE_RE.fullmatch(v):
-            raise ValueError("value contains disallowed characters.")
         return v
 
 
@@ -325,76 +284,45 @@ class ZfsListDatasetsInput(BaseModel):
 
 
 @mcp.tool(
-    name="proxmox_zfs_create_dataset",
+    name="proxmox_zfs_dataset",
     annotations={
-        "title": "Create ZFS Dataset",
-        "readOnlyHint": False,
-        "destructiveHint": False,
-        "idempotentHint": False,
-        "openWorldHint": True,
-    },
-)
-async def proxmox_zfs_create_dataset(params: ZfsCreateDatasetInput) -> str:
-    """Create a new ZFS dataset (filesystem) via SSH.
-
-    Examples:
-      - name='nvmepool/data', properties={'compression': 'zstd'}
-      - name='nvmepool/vms/web01', parents=true
-
-    Requires confirm=true.
-    """
-    cfg_err = require_ssh()
-    if cfg_err:
-        return cfg_err
-    if not params.confirm:
-        return missing_confirm("proxmox_zfs_create_dataset")
-
-    argv: list[str] = ["zfs", "create"]
-    if params.parents:
-        argv.append("-p")
-    if params.properties:
-        for k, v in params.properties.items():
-            argv.extend(["-o", f"{k}={v}"])
-    argv.append(params.name)
-
-    try:
-        rc, out, err = await ssh.run_command(argv)
-    except ssh.SshError as exc:
-        return ssh.format_ssh_error(exc)
-
-    if rc != 0:
-        return f"Error: zfs create failed (rc={rc}).\nstderr: {err.strip()}"
-    return f"OK: Dataset `{params.name}` created."
-
-
-@mcp.tool(
-    name="proxmox_zfs_destroy_dataset",
-    annotations={
-        "title": "Destroy ZFS Dataset (DESTROY DATA)",
+        "title": "Create / Destroy ZFS Dataset",
         "readOnlyHint": False,
         "destructiveHint": True,
         "idempotentHint": False,
         "openWorldHint": True,
     },
 )
-async def proxmox_zfs_destroy_dataset(params: ZfsDestroyDatasetInput) -> str:
-    """Destroy a ZFS dataset (and optionally its children/snapshots).
+async def proxmox_zfs_dataset(params: ZfsDatasetInput) -> str:
+    """Create or destroy a ZFS dataset via SSH.
 
-    Requires confirm=true. With recursive=true, also requires
-    i_understand_data_loss=true because children + all snapshots will be lost.
+    create (confirm): e.g. name='nvmepool/data',
+    properties={'compression': 'zstd'}, parents=true for missing parents.
+
+    destroy (confirm): with recursive=true also requires
+    i_understand_data_loss=true — children and all snapshots are lost.
     """
     cfg_err = require_ssh()
     if cfg_err:
         return cfg_err
     if not params.confirm:
-        return missing_confirm("proxmox_zfs_destroy_dataset")
-    if params.recursive and not params.i_understand_data_loss:
-        return missing_data_loss_ack("proxmox_zfs_destroy_dataset")
+        return missing_confirm(f"proxmox_zfs_dataset (action={params.action})")
 
-    argv = ["zfs", "destroy"]
-    if params.recursive:
-        argv.append("-r")
-    argv.append(params.name)
+    if params.action == "create":
+        argv: list[str] = ["zfs", "create"]
+        if params.parents:
+            argv.append("-p")
+        if params.properties:
+            for k, v in params.properties.items():
+                argv.extend(["-o", f"{k}={v}"])
+        argv.append(params.name)
+    else:  # destroy
+        if params.recursive and not params.i_understand_data_loss:
+            return missing_data_loss_ack("proxmox_zfs_dataset (action=destroy)")
+        argv = ["zfs", "destroy"]
+        if params.recursive:
+            argv.append("-r")
+        argv.append(params.name)
 
     try:
         rc, out, err = await ssh.run_command(argv)
@@ -402,44 +330,9 @@ async def proxmox_zfs_destroy_dataset(params: ZfsDestroyDatasetInput) -> str:
         return ssh.format_ssh_error(exc)
 
     if rc != 0:
-        return f"Error: zfs destroy failed (rc={rc}).\nstderr: {err.strip()}"
-    return f"OK: Dataset `{params.name}` destroyed."
-
-
-@mcp.tool(
-    name="proxmox_zfs_set_property",
-    annotations={
-        "title": "Set ZFS Property",
-        "readOnlyHint": False,
-        "destructiveHint": False,
-        "idempotentHint": True,
-        "openWorldHint": True,
-    },
-)
-async def proxmox_zfs_set_property(params: ZfsSetPropertyInput) -> str:
-    """Set a ZFS property on a dataset (zfs set property=value name).
-
-    Only allow-listed properties are accepted; the value must match a strict
-    character set (alphanumerics, dot, dash, slash, percent, equals, colon).
-
-    Requires confirm=true.
-    """
-    cfg_err = require_ssh()
-    if cfg_err:
-        return cfg_err
-    if not params.confirm:
-        return missing_confirm("proxmox_zfs_set_property")
-
-    argv = ["zfs", "set", f"{params.property}={params.value}", params.name]
-    try:
-        rc, out, err = await ssh.run_command(argv)
-    except ssh.SshError as exc:
-        return ssh.format_ssh_error(exc)
-    if rc != 0:
-        return f"Error: zfs set failed (rc={rc}).\nstderr: {err.strip()}"
-    return (
-        f"OK: Set `{params.property}={params.value}` on `{params.name}`."
-    )
+        return f"Error: zfs {params.action} failed (rc={rc}).\nstderr: {err.strip()}"
+    verb = "created" if params.action == "create" else "destroyed"
+    return f"OK: Dataset `{params.name}` {verb}."
 
 
 @mcp.tool(
@@ -491,10 +384,7 @@ async def proxmox_zfs_create_snapshot(params: ZfsSnapshotInput) -> str:
     },
 )
 async def proxmox_zfs_list_datasets(params: ZfsListDatasetsInput) -> str:
-    """List ZFS datasets via SSH (`zfs list -H -p -o name,type,used,avail,refer,mountpoint`).
-
-    Optional: scope to a pool, include snapshots.
-    """
+    """List ZFS datasets via SSH. Optional: scope to a pool, include snapshots."""
     cfg_err = require_ssh()
     if cfg_err:
         return cfg_err
@@ -581,11 +471,6 @@ async def proxmox_zfs_destroy_snapshots_by_pattern(
       - max_delete caps a single call's deletions (default 1000)
       - Each snapshot deleted with its own `zfs destroy` — atomicity
         is per-snapshot, not per-batch. Partial completion is logged.
-
-    Returns:
-        str: For dry_run: the list of matching snapshots with creation
-             time and `used` size. For real run: per-snapshot result
-             and a summary.
     """
     cfg_err = require_ssh()
     if cfg_err:

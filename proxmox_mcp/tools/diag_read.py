@@ -178,7 +178,7 @@ async def proxmox_list_backup_jobs(params: FormatInput = FormatInput()) -> str:
     except Exception as exc:
         return http_client.format_http_error(exc)
     if params.response_format == ResponseFormat.JSON:
-        return compact_json(jobs)
+        return compact_json(jobs, fields=params.fields)
     if not jobs:
         return "_No backup jobs configured._"
     lines = ["## Backup jobs", ""]

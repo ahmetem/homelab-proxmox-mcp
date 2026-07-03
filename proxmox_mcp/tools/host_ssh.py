@@ -72,7 +72,7 @@ async def proxmox_host_exec(params: HostExecInput) -> str:
     Every call is recorded in _host_ssh_audit.log next to the package.
 
     Prefer the typed API tools (proxmox_list_disks, proxmox_zfs_*,
-    proxmox_create_snapshot, etc.) when one exists for the task — this
+    proxmox_snapshot, etc.) when one exists for the task — this
     tool is intentionally an escape hatch for ad-hoc work like mounting
     USB disks, running rsync, or diagnostics.
     """

@@ -12,15 +12,30 @@ kümelerde de çalışır — her araç bir `node` parametresi alır.
 
 ## Özellikler
 
-Paket, dokuz faz (0–7, ayrıca bir "2.5") içinde **64 araç** sunar;
-aşağıda kategoriye göre gruplanmıştır. Salt-okunur araçlar otomatik
-çağrılabilir; durum değiştiren her araç `confirm=true`, kalıcı veri silen
-araçlar ayrıca `i_understand_data_loss=true` gerektirir (bkz. **Güvenlik**).
+Paket **49 araç** sunar; aşağıda kategoriye göre gruplanmıştır.
+Salt-okunur araçlar otomatik çağrılabilir; durum değiştiren her araç
+`confirm=true`, kalıcı veri silen araçlar ayrıca
+`i_understand_data_loss=true` gerektirir (bkz. **Güvenlik**).
 
-### Küme & node'lar (salt-okunur)
+Token verimliliği özellikleri (v1.0):
+
+- **`proxmox_health_overview`** — "sunucu nasıl?" sorusunu tek çağrıda yanıtlar.
+- **Liste filtreleri** — örn. `proxmox_list_vms(status='running', node=...)`,
+  `proxmox_list_backups(vmid=...)` — yalnızca istediğinizi döndürür.
+- **`fields` projeksiyonu** — `response_format='json'` ile
+  `fields=['vmid','name','status']` geçerek diğer tüm alanları atar.
+- **`wait_seconds`** — task başlatan araçlar (power, snapshot, backup,
+  restore, clone, move-disk, LVM/ZFS provisioning) Proxmox task'ını
+  sunucu tarafında bekleyip nihai sonucu tek cevapta döndürür; ayrı bir
+  durum sorgusu gerekmez.
+- JSON çıktısı kompakt ve uzunluk sınırlıdır; taşan listeler eleman
+  bazında kırpılır ve geçerli JSON kalır (`{"_truncated_items": N}`).
+
+### Genel bakış & node'lar (salt-okunur)
 
 | Araç | Açıklama |
 |---|---|
+| `proxmox_health_overview` | Tek çağrılık özet: node yükü, guest durumları, storage doluluk, ZFS pool sağlığı |
 | `proxmox_list_nodes` | Kümedeki tüm node'ları durum, uptime, CPU ve RAM ile listeler |
 | `proxmox_get_node_status` | Tek node için ayrıntılı durum: CPU modeli, kernel, load avg, disk, swap |
 
@@ -28,12 +43,9 @@ araçlar ayrıca `i_understand_data_loss=true` gerektirir (bkz. **Güvenlik**).
 
 | Araç | Açıklama |
 |---|---|
-| `proxmox_list_vms` | Kümedeki tüm VM ve LXC container'ları listeler (salt-okunur) |
+| `proxmox_list_vms` | VM/CT listesi; filtreler: `node`, `vmid`, `status`, `guest_type` (salt-okunur) |
 | `proxmox_get_vm_status` | Belirli bir VM/CT için ayrıntılı runtime metrikleri (salt-okunur) |
-| `proxmox_vm_start` | VM veya LXC container başlatır |
-| `proxmox_vm_shutdown` | Düzgün (ACPI) kapatma |
-| `proxmox_vm_stop` | Zorla durdurma (fişi çekme) — veri kaybına yol açabilir |
-| `proxmox_vm_reboot` | Önce graceful, sonra gerekirse power-cycle ile yeniden başlatma |
+| `proxmox_vm_power` | Güç aksiyonu: `action='start' \| 'shutdown' \| 'stop' \| 'reboot'` (guest türü otomatik saptanır) |
 | `proxmox_resize_vm` | VM/CT'nin RAM (`memory_mb`) ve/veya CPU `cores` değerini değiştirir |
 
 ### Snapshot'lar
@@ -41,15 +53,13 @@ araçlar ayrıca `i_understand_data_loss=true` gerektirir (bkz. **Güvenlik**).
 | Araç | Açıklama |
 |---|---|
 | `proxmox_list_snapshots` | Belirli bir VM/CT'nin snapshot'ları (salt-okunur) |
-| `proxmox_create_snapshot` | VM/CT için snapshot oluşturur |
-| `proxmox_rollback_snapshot` | Snapshot'a dönüş — sonraki veriler kaybolur |
-| `proxmox_delete_snapshot` | Bir VM/CT'nin adlandırılmış snapshot'ını siler |
+| `proxmox_snapshot` | `action='create' \| 'rollback' \| 'delete'`. Rollback snapshot'tan sonraki durumu kaybettirir; delete ayrıca `i_understand_data_loss=true` ister |
 
 ### Yedekler
 
 | Araç | Açıklama |
 |---|---|
-| `proxmox_list_backups` | Bir storage'daki yedek dosyaları (salt-okunur) |
+| `proxmox_list_backups` | Bir storage'daki yedekler, en yeniden eskiye; filtreler: `vmid`, `limit` (salt-okunur) |
 | `proxmox_create_backup` | Seçilebilir mod ve sıkıştırma ile yedek oluşturur |
 | `proxmox_restore_backup` | Bir yedek arşivinden VM/CT geri yükler. Mevcut VMID'nin üzerine yazılması `force=true` ve `i_understand_data_loss=true` olmadıkça reddedilir. |
 
@@ -60,7 +70,7 @@ araçlar ayrıca `i_understand_data_loss=true` gerektirir (bkz. **Güvenlik**).
 | `proxmox_list_storage` | Node üzerindeki storage pool'lar ve kullanım bilgisi |
 | `proxmox_storage_usage_detail` | Tek bir storage için tür bazında içerik dökümü: toplam boyutlar + en büyük N item. Kapasite planlaması için (örn. "hangi VM backup storage'ımı yiyor?"). |
 
-### Phase 1 — disk / LVM / ZFS envanteri (salt-okunur)
+### Disk / LVM / ZFS envanteri (salt-okunur)
 
 | Araç | Açıklama |
 |---|---|
@@ -71,24 +81,17 @@ araçlar ayrıca `i_understand_data_loss=true` gerektirir (bkz. **Güvenlik**).
 | `proxmox_list_zfs` | Node üzerindeki ZFS pool'lar (kapasite/sağlık ile) |
 | `proxmox_get_zfs_pool` | Tek bir ZFS pool'un ayrıntılı durumu |
 
-### Phase 2 — disk hazırlama & storage provisioning
+### Disk hazırlama & storage provisioning
 
 | Araç | Açıklama |
 |---|---|
-| `proxmox_disk_init_gpt` | Boş bir diski GPT partition tablosu ile başlatır |
-| `proxmox_wipe_disk` | Bir diskteki tüm partition/signature'ları siler (yıkıcı) |
-| `proxmox_create_lvm_vg` | Bir disk üzerinde LVM volume group oluşturur |
-| `proxmox_create_lvm_thin` | LVM-thin pool oluşturur |
-| `proxmox_destroy_lvm_vg` | LVM volume group'u yok eder (yıkıcı) |
-| `proxmox_destroy_lvm_thin` | LVM-thin pool'u yok eder (yıkıcı) |
-| `proxmox_create_zfs_pool` | Bir veya daha çok disk üzerinde ZFS pool oluşturur |
-| `proxmox_destroy_zfs_pool` | ZFS pool'u yok eder (yıkıcı) |
+| `proxmox_disk_prepare` | Diskte `action='wipe' \| 'init_gpt'` (yıkıcı). `via='auto'` (varsayılan) önce REST API'yi dener; endpoint API token'ı reddederse SSH'a (`wipefs`/`sgdisk`) düşer |
+| `proxmox_lvm_manage` | `action='create_vg' \| 'create_thin' \| 'destroy_vg' \| 'destroy_thin'` (destroy'lar yıkıcı) |
+| `proxmox_zfs_pool_manage` | ZFS pool `action='create' \| 'destroy'` (destroy yıkıcı) |
 | `proxmox_list_cluster_storage` | Datacenter seviyesi storage yapılandırmasını listeler (salt-okunur) |
-| `proxmox_add_zfs_storage` | Mevcut bir ZFS pool'u Proxmox storage olarak kaydeder |
-| `proxmox_add_dir_storage` | Bir dizini Proxmox storage olarak kaydeder |
-| `proxmox_remove_storage` | Datacenter config'inden bir storage girdisini kaldırır |
+| `proxmox_storage_config` | Datacenter storage girdilerinde `action='add_zfs' \| 'add_dir' \| 'remove'` (`remove` veriye dokunmaz) |
 
-### Phase 2.5 — SSH tabanlı ZFS / disk işlemleri
+### SSH tabanlı ZFS işlemleri
 
 Bunlar, API token'ının yapamadığı işlemler için node üzerinde SSH ile
 shell komutu çalıştırır. [Yapılandırma referansı](#yapılandırma-referansı)
@@ -96,28 +99,24 @@ bölümündeki SSH ayarlarını gerektirir.
 
 | Araç | Açıklama |
 |---|---|
-| `proxmox_ssh_wipe_disk` | Bir diski SSH üzerinden siler (yıkıcı) |
-| `proxmox_ssh_init_gpt` | SSH üzerinden GPT label oluşturur |
-| `proxmox_zfs_create_dataset` | ZFS dataset/filesystem oluşturur |
-| `proxmox_zfs_destroy_dataset` | ZFS dataset'i yok eder (yıkıcı) |
-| `proxmox_zfs_set_property` | Bir ZFS dataset'inde property ayarlar |
+| `proxmox_zfs_dataset` | ZFS dataset `action='create' \| 'destroy'` (recursive destroy `i_understand_data_loss=true` ister) |
+| `proxmox_zfs_property` | ZFS property `action='get' \| 'set'` (`set` allowlist'lidir ve `confirm=true` ister) |
 | `proxmox_zfs_create_snapshot` | Bir dataset'in ZFS snapshot'ını oluşturur |
 | `proxmox_zfs_list_datasets` | ZFS dataset'lerini listeler (salt-okunur) |
 | `proxmox_zfs_destroy_snapshots_by_pattern` | Glob pattern'ine uyan ZFS snapshot'larını toplu siler. İki aşamalı: `dry_run=true` (varsayılan) eşleşmeleri listeler; `dry_run=false` + `confirm=true` + `i_understand_data_loss=true` ile gerçek silme yapılır. `max_delete` (varsayılan 1000) ile sınırlanmıştır. |
 
-### Phase 3 — VM disk / clone / ISO + ZFS durumu
+### VM disk / clone / ISO + ZFS durumu
 
 | Araç | Açıklama |
 |---|---|
 | `proxmox_move_disk` | Bir VM diskini başka bir storage'a taşır |
 | `proxmox_clone_vm` | Bir VM/CT'yi yeni bir VMID'ye klonlar |
 | `proxmox_list_isos` | Storage'lardaki mevcut ISO imajlarını listeler (salt-okunur) |
-| `proxmox_zfs_get_property` | Bir ZFS dataset/pool'dan property okur (salt-okunur) |
 | `proxmox_zfs_pool_status` | Bir pool için `zpool status`: sağlık, hatalar, scrub durumu (salt-okunur) |
 | `proxmox_zfs_scrub` | Bir ZFS pool'da scrub başlatır |
 | `proxmox_zfs_send` | Replikasyon için ZFS send stream'i |
 
-### Phase 4 — guest VM SSH (full shell, audit-logged)
+### Guest VM SSH (full shell, audit-logged)
 
 | Araç | Açıklama |
 |---|---|
@@ -125,14 +124,14 @@ bölümündeki SSH ayarlarını gerektirir.
 | `proxmox_vm_exec` | Kayıtlı bir guest VM'de SSH üzerinden shell komutu çalıştırır (`vm_ssh_hosts.json` kullanır). `confirm=true` gerektirir. |
 | `proxmox_vm_read_file` | Kayıtlı bir guest VM'den SSH ile dosya okur (salt-okunur) |
 
-### Phase 5 — Proxmox host SSH (full shell, audit-logged)
+### Proxmox host SSH (full shell, audit-logged)
 
 | Araç | Açıklama |
 |---|---|
 | `proxmox_host_exec` | Proxmox host'ta SSH üzerinden serbest shell komutu çalıştırır. `confirm=true` gerektirir; yıkıcı pattern'lere uyan komutlar ayrıca `i_understand_data_loss=true` ister. Her çağrı `_host_ssh_audit.log`'a yazılır. |
 | `proxmox_host_read_exec` | Proxmox host'ta tek bir **salt-okuma**, allowlist'li komut çalıştırır (`cat`, `tail`, `journalctl`, `zpool status`, `systemctl status`, `pct`/`qm config`, …). `confirm` gerekmez — shell metakarakterlerini (pipe/redirect/substitution/zincirleme), allowlist-dışı binary'leri, mutasyon alt-komutlarını ve askıda kalan/durum değiştiren bayrakları reddeder. Salt-okuma ajanlara güvenle verilebilir. |
 
-### Phase 6 — LXC exec
+### LXC exec
 
 | Araç | Açıklama |
 |---|---|
@@ -140,7 +139,7 @@ bölümündeki SSH ayarlarını gerektirir.
 | `proxmox_ct_service_action` | `proxmox_lxc_exec` üzerine typed kısayol: bir CT içinde `systemctl --no-pager <action> <service>`. Salt-okunur action'lar (status, is-active, is-enabled, show) `confirm` istemez; durum değiştirenler (start, stop, restart, reload, enable, disable, mask, unmask) `confirm=true` gerektirir. |
 | `proxmox_ct_log_tail` | Bir CT içinden journald unit veya log dosyası tail eden salt-okunur araç. İki mod: `service` (journalctl -u) ve `file` (tail -n). Opsiyonel `grep` server-side filter. |
 
-### Phase 7 — tanılama, adli inceleme & temizlik
+### Tanılama, adli inceleme & temizlik
 
 | Araç | Açıklama |
 |------|----------|
@@ -307,7 +306,7 @@ deneyebilirsin:
 
 > "VM 101'i yeniden başlat."
 
-Claude onay isteyecek. Onayladıktan sonra `proxmox_vm_reboot`'u
+Claude onay isteyecek. Onayladıktan sonra `proxmox_vm_power`'ı
 `confirm=true` ile çağırır.
 
 ## Örnek senaryolar
@@ -317,14 +316,14 @@ Claude onay isteyecek. Onayladıktan sonra `proxmox_vm_reboot`'u
 > "VM 101'i 4 GB RAM'e ayarla, sonra yeniden başlat."
 
 Claude `proxmox_resize_vm`'i `memory_mb=4096, confirm=true` ile, sonra
-`proxmox_vm_reboot`'u `confirm=true` ile çağırır.
+`proxmox_vm_power`'ı `action='reboot', confirm=true, wait_seconds=60` ile çağırır.
 
 **Riskli güncelleme öncesi hızlı snapshot:**
 
 > "VM 102 için `pre-upgrade` adında snapshot oluştur, açıklaması
 > 'kernel güncellemesi öncesi'."
 
-Claude `proxmox_create_snapshot`'u `confirm=true` ile çağırır.
+Claude `proxmox_snapshot`'u `action='create', confirm=true` ile çağırır.
 
 **Sağlık kontrolü:**
 
@@ -346,7 +345,7 @@ Tüm ayarlar `.env`'den okunan ortam değişkenlerinden gelir:
 | `PROXMOX_VERIFY_SSL` | `false` | API'nin TLS sertifikasını doğrula |
 | `PROXMOX_TIMEOUT` | `30` | HTTP timeout (saniye) |
 
-### SSH (opsiyonel — Phase 2.5 / 4 / 5 / 6 araçları için gerekli)
+### SSH (opsiyonel — SSH tabanlı araçlar için gerekli)
 
 SSH tabanlı araçlar Proxmox host'ta (ve `proxmox_vm_*` için guest VM'lerde)
 shell komutu çalıştırır. SSH yapılandırılana kadar pasiftirler.

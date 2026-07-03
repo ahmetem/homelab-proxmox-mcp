@@ -37,11 +37,7 @@ def _pct(used, total) -> str:
     },
 )
 async def proxmox_list_lvm(params: NodeInput) -> str:
-    """List LVM volume groups on a node, with their physical volumes and logical volumes.
-
-    Returns:
-        str: For each VG: size/free, member PVs, contained LVs.
-    """
+    """List LVM volume groups on a node, with their PVs and LVs."""
     cfg = require_config()
     if cfg:
         return cfg
@@ -52,7 +48,7 @@ async def proxmox_list_lvm(params: NodeInput) -> str:
         return http_client.format_http_error(exc)
 
     if params.response_format == ResponseFormat.JSON:
-        return compact_json(data)
+        return compact_json(data, fields=params.fields)
 
     children = data.get("children") if isinstance(data, dict) else data
     if not children:
@@ -104,14 +100,7 @@ async def proxmox_list_lvm(params: NodeInput) -> str:
     },
 )
 async def proxmox_list_lvm_thin(params: NodeInput) -> str:
-    """List LVM-thin pools on a node.
-
-    A thin pool is the storage type used by the default `local-lvm` in
-    most Proxmox installations.
-
-    Returns:
-        str: For each thin pool: VG, name, size, used %.
-    """
+    """List LVM-thin pools on a node (the storage type behind `local-lvm`)."""
     cfg = require_config()
     if cfg:
         return cfg
@@ -122,7 +111,7 @@ async def proxmox_list_lvm_thin(params: NodeInput) -> str:
         return http_client.format_http_error(exc)
 
     if params.response_format == ResponseFormat.JSON:
-        return compact_json(pools)
+        return compact_json(pools, fields=params.fields)
 
     if not pools:
         return f"_No LVM-thin pools on `{params.node}`._"

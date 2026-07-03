@@ -1,6 +1,7 @@
 """Async HTTP helpers for the Proxmox REST API."""
 from __future__ import annotations
 
+import asyncio
 from typing import Any, Optional
 
 import httpx
@@ -61,3 +62,32 @@ async def delete(path: str, params: Optional[dict] = None) -> Any:
         r = await c.delete(path, params=params)
         r.raise_for_status()
         return r.json().get("data")
+
+
+async def wait_for_task(node: str, upid: Any, wait_seconds: int) -> str:
+    """Poll a PVE task's status for up to `wait_seconds` and return a short
+    suffix describing the outcome (empty string when not waiting or when the
+    task id isn't a UPID). Saves the caller a follow-up status round trip."""
+    if wait_seconds <= 0 or not isinstance(upid, str) or not upid.startswith("UPID:"):
+        return ""
+    loop = asyncio.get_event_loop()
+    deadline = loop.time() + wait_seconds
+    delay = 1.0
+    while True:
+        try:
+            st = await get(f"/nodes/{node}/tasks/{upid}/status")
+        except Exception:
+            return " (task status poll failed — check proxmox_get_task_log)"
+        if st and st.get("status") == "stopped":
+            exitstatus = st.get("exitstatus", "?")
+            if exitstatus == "OK":
+                return " Task finished: OK."
+            return f" Task FAILED: {exitstatus}. See proxmox_get_task_log for details."
+        remaining = deadline - loop.time()
+        if remaining <= 0:
+            return (
+                f" Task still running after {wait_seconds}s — it continues in "
+                "the background; check later with proxmox_get_task_log."
+            )
+        await asyncio.sleep(min(delay, remaining))
+        delay = min(delay * 1.5, 5.0)

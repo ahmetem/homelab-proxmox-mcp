@@ -1,4 +1,4 @@
-"""Phase 2: ZFS pool create / destroy.
+"""Phase 2: ZFS pool create / destroy (single manage tool).
 
 Backed by Proxmox REST endpoints:
   - POST   /nodes/{node}/disks/zfs        body: name, devices, raidlevel,
@@ -7,28 +7,18 @@ Backed by Proxmox REST endpoints:
 
 raidlevel values accepted by Proxmox 8.x / 9.x:
   single, mirror, raid10, raidz, raidz2, raidz3, draid, draid2, draid3
-
-Minimum devices per layout:
-  single:  1
-  mirror:  2 (multiple mirror vdevs use 2N devices total)
-  raid10:  4, must be even
-  raidz:   3
-  raidz2:  4
-  raidz3:  5
-
-compression: on, off, lzjb, lz4 (default), zle, gzip, zstd
-ashift: 9..16 (default 12 = 4K sectors; use 13 for many modern NVMe)
 """
 from __future__ import annotations
 
 from typing import Optional
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from proxmox_mcp import http_client
 from proxmox_mcp.config import require_config
 from proxmox_mcp.format import missing_confirm, missing_data_loss_ack
 from proxmox_mcp.mcp_instance import mcp
+from proxmox_mcp.models import WAIT_DESC
 
 
 _POOL_NAME = r"^[A-Za-z][A-Za-z0-9_.-]*$"
@@ -46,52 +36,76 @@ _RAID_MIN_DEVICES = {
 }
 
 
-class ZfsCreateInput(BaseModel):
+class ZfsPoolManageInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
+    action: str = Field(
+        ...,
+        description=(
+            "'create' (needs devices; confirm) or 'destroy' "
+            "(confirm + i_understand_data_loss — all data lost)."
+        ),
+        pattern="^(create|destroy)$",
+    )
     node: str = Field(..., min_length=1)
     name: str = Field(
         ..., description="ZFS pool name (must start with letter).",
         min_length=1, max_length=64, pattern=_POOL_NAME,
     )
-    devices: list[str] = Field(
-        ...,
+    devices: Optional[list[str]] = Field(
+        default=None,
         description=(
-            "Block devices to add to the pool. All must be empty — wipe first "
-            "if needed. Single-disk pools use one device; mirror/raidz use multiple."
+            "create only: block devices for the pool. All must be empty — "
+            "wipe first if needed."
         ),
-        min_length=1, max_length=64,
+        max_length=64,
     )
     raidlevel: str = Field(
         default="single",
         description=(
-            "Pool layout: single, mirror, raid10, raidz, raidz2, raidz3, "
-            "draid, draid2, draid3. Defaults to 'single' (one-disk pool)."
+            "create only: single, mirror, raid10, raidz, raidz2, raidz3, "
+            "draid, draid2, draid3."
         ),
         pattern=r"^(single|mirror|raid10|raidz|raidz2|raidz3|draid|draid2|draid3)$",
     )
     ashift: int = Field(
         default=12,
         description=(
-            "ZFS ashift (sector-size hint as power of 2). 12 = 4K (most disks), "
-            "13 = 8K (many newer NVMe). Cannot be changed after creation."
+            "create only: sector-size hint as power of 2 (12 = 4K, 13 = 8K "
+            "NVMe). Cannot be changed after creation."
         ),
         ge=9, le=16,
     )
     compression: str = Field(
         default="lz4",
-        description="Compression algorithm. lz4 is recommended (fast, ubiquitous).",
+        description="create only: compression algorithm (lz4 recommended).",
         pattern=r"^(on|off|lzjb|lz4|zle|gzip|zstd)$",
     )
     add_storage: bool = Field(
         default=True,
-        description="If true (default), also register the pool as PVE storage.",
+        description="create only: also register the pool as PVE storage.",
+    )
+    cleanup_config: bool = Field(
+        default=True,
+        description="destroy only: also remove matching PVE storage entries.",
+    )
+    cleanup_disks: bool = Field(
+        default=False,
+        description=(
+            "destroy only: also wipe the underlying disks. Extra dangerous."
+        ),
     )
     confirm: bool = Field(default=False)
+    i_understand_data_loss: bool = Field(
+        default=False, description="Required for action='destroy'."
+    )
+    wait_seconds: int = Field(default=0, ge=0, le=600, description=WAIT_DESC)
     reason: Optional[str] = Field(default=None, max_length=200)
 
     @field_validator("devices")
     @classmethod
-    def _validate_devices(cls, v: list[str]) -> list[str]:
+    def _validate_devices(cls, v):
+        if v is None:
+            return v
         for d in v:
             if not d.startswith("/dev/"):
                 raise ValueError(f"Device must start with /dev/: {d}")
@@ -99,57 +113,56 @@ class ZfsCreateInput(BaseModel):
                 raise ValueError(f"Invalid device path: {d}")
         return v
 
-
-class ZfsDestroyInput(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    node: str = Field(..., min_length=1)
-    name: str = Field(
-        ..., description="ZFS pool name to destroy.",
-        min_length=1, max_length=64, pattern=_POOL_NAME,
-    )
-    cleanup_config: bool = Field(default=True, description="If true, also remove matching PVE storage configuration entries.")
-    cleanup_disks: bool = Field(
-        default=False,
-        description=(
-            "If true, also wipe the underlying disks after exporting the pool. "
-            "Extra dangerous — set only when you actually want to free the disks."
-        ),
-    )
-    confirm: bool = Field(default=False)
-    i_understand_data_loss: bool = Field(default=False)
-    reason: Optional[str] = Field(default=None, max_length=200)
+    @model_validator(mode="after")
+    def _check_required(self):
+        if self.action == "create" and not self.devices:
+            raise ValueError("action='create' requires 'devices'.")
+        return self
 
 
 @mcp.tool(
-    name="proxmox_create_zfs_pool",
+    name="proxmox_zfs_pool_manage",
     annotations={
-        "title": "Create ZFS Pool",
+        "title": "Create / Destroy ZFS Pool",
         "readOnlyHint": False, "destructiveHint": True,
         "idempotentHint": False, "openWorldHint": True,
     },
 )
-async def proxmox_create_zfs_pool(params: ZfsCreateInput) -> str:
-    """Create a ZFS pool on one or more devices, optionally registering it as PVE storage.
+async def proxmox_zfs_pool_manage(params: ZfsPoolManageInput) -> str:
+    """Create or destroy a ZFS pool.
 
-    All devices must be empty (no partition table, no FS signatures). Use
-    proxmox_wipe_disk first if needed.
-
-    Layout choices:
-      - single   : one disk, no redundancy
-      - mirror   : N-way mirror (every disk = full copy)
-      - raid10   : striped mirrors (even number of disks, ≥4)
-      - raidz    : single parity, ≥3 disks
-      - raidz2   : double parity, ≥4 disks
-      - raidz3   : triple parity, ≥5 disks
-
+    create: devices must be empty (wipe first via proxmox_disk_prepare);
+    layout minimums — mirror≥2, raid10≥4 (even), raidz≥3, raidz2≥4, raidz3≥5.
     Requires confirm=true.
+
+    destroy: all datasets, snapshots, and zvols are irretrievable. Requires
+    BOTH confirm=true AND i_understand_data_loss=true.
+    Set wait_seconds>0 for the task result inline.
     """
     cfg = require_config()
     if cfg:
         return cfg
     if not params.confirm:
-        return missing_confirm("proxmox_create_zfs_pool")
+        return missing_confirm(f"proxmox_zfs_pool_manage (action={params.action})")
 
+    if params.action == "destroy":
+        if not params.i_understand_data_loss:
+            return missing_data_loss_ack("proxmox_zfs_pool_manage (action=destroy)")
+        query = {"cleanup-config": 1 if params.cleanup_config else 0,
+                 "cleanup-disks": 1 if params.cleanup_disks else 0}
+        try:
+            task_id = await http_client.delete(
+                f"/nodes/{params.node}/disks/zfs/{params.name}", params=query)
+        except Exception as exc:
+            return http_client.format_http_error(exc)
+        suffix = await http_client.wait_for_task(
+            params.node, task_id, params.wait_seconds)
+        return (
+            f"OK: Destroy of ZFS pool '{params.name}' started "
+            f"({params.node}). Task: {task_id}.{suffix}"
+        )
+
+    # create
     min_devs = _RAID_MIN_DEVICES.get(params.raidlevel, 1)
     if len(params.devices) < min_devs:
         return (
@@ -168,48 +181,18 @@ async def proxmox_create_zfs_pool(params: ZfsCreateInput) -> str:
         "add_storage": 1 if params.add_storage else 0,
     }
     try:
-        task_id = await http_client.post(f"/nodes/{params.node}/disks/zfs", data=payload)
+        task_id = await http_client.post(
+            f"/nodes/{params.node}/disks/zfs", data=payload)
     except Exception as exc:
         return http_client.format_http_error(exc)
 
     storage_msg = " Also registered as PVE storage." if params.add_storage else ""
+    suffix = await http_client.wait_for_task(params.node, task_id, params.wait_seconds)
+    if not suffix:
+        suffix = " Use proxmox_get_zfs_pool to verify once the task completes."
     return (
         f"OK: ZFS pool '{params.name}' creation started on "
         f"{len(params.devices)} device(s), layout={params.raidlevel}, "
         f"ashift={params.ashift}, compression={params.compression} "
-        f"({params.node}).{storage_msg} Task: {task_id}. "
-        "Use proxmox_get_zfs_pool to verify once the task completes."
+        f"({params.node}).{storage_msg} Task: {task_id}.{suffix}"
     )
-
-
-@mcp.tool(
-    name="proxmox_destroy_zfs_pool",
-    annotations={
-        "title": "Destroy ZFS Pool (DESTROY ALL DATA)",
-        "readOnlyHint": False, "destructiveHint": True,
-        "idempotentHint": False, "openWorldHint": True,
-    },
-)
-async def proxmox_destroy_zfs_pool(params: ZfsDestroyInput) -> str:
-    """Destroy a ZFS pool and all data within it.
-
-    Requires BOTH confirm=true AND i_understand_data_loss=true.
-
-    All datasets, snapshots, and zvols are irretrievable. If cleanup_disks=true,
-    the underlying disks are also wiped.
-    """
-    cfg = require_config()
-    if cfg:
-        return cfg
-    if not params.confirm:
-        return missing_confirm("proxmox_destroy_zfs_pool")
-    if not params.i_understand_data_loss:
-        return missing_data_loss_ack("proxmox_destroy_zfs_pool")
-
-    query = {"cleanup-config": 1 if params.cleanup_config else 0, "cleanup-disks": 1 if params.cleanup_disks else 0}
-    try:
-        task_id = await http_client.delete(f"/nodes/{params.node}/disks/zfs/{params.name}", params=query)
-    except Exception as exc:
-        return http_client.format_http_error(exc)
-
-    return f"OK: Destroy of ZFS pool '{params.name}' started ({params.node}). Task: {task_id}"

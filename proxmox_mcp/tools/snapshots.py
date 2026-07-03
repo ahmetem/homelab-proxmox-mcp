@@ -1,44 +1,13 @@
-"""Snapshot list / create / rollback / delete tools."""
+"""Snapshot list + manage (create/rollback/delete) tools."""
 from __future__ import annotations
 
 import datetime as _dt
-from typing import Optional
-
-from pydantic import BaseModel, ConfigDict, Field
 
 from proxmox_mcp import http_client
 from proxmox_mcp.config import require_config
 from proxmox_mcp.format import compact_json, missing_confirm, missing_data_loss_ack
 from proxmox_mcp.mcp_instance import mcp
-from proxmox_mcp.models import (
-    ResponseFormat,
-    SnapshotCreateInput,
-    SnapshotRollbackInput,
-    VMInput,
-)
-
-
-class SnapshotDeleteInput(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    node: str = Field(..., min_length=1)
-    vmid: int = Field(..., ge=100)
-    vm_type: str = Field(default="qemu", pattern="^(qemu|lxc)$")
-    snapname: str = Field(
-        ...,
-        description="Snapshot name to delete.",
-        min_length=1, max_length=40,
-        pattern=r"^[A-Za-z][A-Za-z0-9_-]*$",
-    )
-    force: bool = Field(
-        default=False,
-        description=(
-            "If true, force deletion even if the snapshot can't be cleanly "
-            "removed (e.g. dangling references). Use with caution."
-        ),
-    )
-    confirm: bool = Field(default=False)
-    i_understand_data_loss: bool = Field(default=False)
-    reason: Optional[str] = Field(default=None, max_length=200)
+from proxmox_mcp.models import ResponseFormat, SnapshotManageInput, VMInput
 
 
 @mcp.tool(
@@ -52,11 +21,7 @@ class SnapshotDeleteInput(BaseModel):
     },
 )
 async def proxmox_list_snapshots(params: VMInput) -> str:
-    """List snapshots for a specific VM or LXC container.
-
-    Returns:
-        str: For each snapshot: name, parent, description.
-    """
+    """List snapshots for a specific VM or LXC container."""
     cfg = require_config()
     if cfg:
         return cfg
@@ -68,7 +33,7 @@ async def proxmox_list_snapshots(params: VMInput) -> str:
         return http_client.format_http_error(exc)
 
     if params.response_format == ResponseFormat.JSON:
-        return compact_json(snaps)
+        return compact_json(snaps, fields=params.fields)
 
     if not snaps:
         return f"_No snapshots for VM {params.vmid}._"
@@ -90,110 +55,53 @@ async def proxmox_list_snapshots(params: VMInput) -> str:
 
 
 @mcp.tool(
-    name="proxmox_create_snapshot",
+    name="proxmox_snapshot",
     annotations={
-        "title": "Create VM Snapshot",
-        "readOnlyHint": False,
-        "destructiveHint": False,
-        "idempotentHint": False,
-        "openWorldHint": True,
-    },
-)
-async def proxmox_create_snapshot(params: SnapshotCreateInput) -> str:
-    """Create a snapshot of a VM or container. Requires confirm=true.
-
-    Snapshot name must start with a letter; alphanumeric, dash, underscore only.
-    """
-    cfg = require_config()
-    if cfg:
-        return cfg
-    if not params.confirm:
-        return missing_confirm("proxmox_create_snapshot")
-    payload = {"snapname": params.snapname}
-    if params.description:
-        payload["description"] = params.description
-    try:
-        task_id = await http_client.post(
-            f"/nodes/{params.node}/{params.vm_type}/{params.vmid}/snapshot",
-            data=payload,
-        )
-    except Exception as exc:
-        return http_client.format_http_error(exc)
-    return (
-        f"OK: Snapshot '{params.snapname}' creation started for "
-        f"{params.vm_type} {params.vmid}. Task: {task_id}"
-    )
-
-
-@mcp.tool(
-    name="proxmox_rollback_snapshot",
-    annotations={
-        "title": "Rollback to Snapshot",
+        "title": "Create / Rollback / Delete VM Snapshot",
         "readOnlyHint": False,
         "destructiveHint": True,
         "idempotentHint": False,
         "openWorldHint": True,
     },
 )
-async def proxmox_rollback_snapshot(params: SnapshotRollbackInput) -> str:
-    """Rollback VM/container to a snapshot. Data after snapshot is lost. Requires confirm=true."""
-    cfg = require_config()
-    if cfg:
-        return cfg
-    if not params.confirm:
-        return missing_confirm("proxmox_rollback_snapshot")
-    try:
-        task_id = await http_client.post(
-            f"/nodes/{params.node}/{params.vm_type}/{params.vmid}"
-            f"/snapshot/{params.snapname}/rollback"
-        )
-    except Exception as exc:
-        return http_client.format_http_error(exc)
-    return (
-        f"OK: Rollback to '{params.snapname}' started for "
-        f"{params.vm_type} {params.vmid}. Task: {task_id}"
-    )
+async def proxmox_snapshot(params: SnapshotManageInput) -> str:
+    """Manage a VM/CT snapshot: action='create', 'rollback', or 'delete'.
 
-
-@mcp.tool(
-    name="proxmox_delete_snapshot",
-    annotations={
-        "title": "Delete VM Snapshot",
-        "readOnlyHint": False,
-        "destructiveHint": True,
-        "idempotentHint": True,
-        "openWorldHint": True,
-    },
-)
-async def proxmox_delete_snapshot(params: SnapshotDeleteInput) -> str:
-    """Delete a VM/CT snapshot.
-
-    The snapshot and any unique data it holds are removed permanently. The
-    VM's current state is not affected. If the snapshot still references an
-    unused source disk (e.g. after a move_disk with delete_source=false),
-    that disk may also become eligible for cleanup once all snapshots are
-    gone.
-
-    Requires confirm=true AND i_understand_data_loss=true.
+    Gates: all actions require confirm=true. 'rollback' discards state newer
+    than the snapshot. 'delete' also requires i_understand_data_loss=true —
+    the snapshot and its unique data are removed permanently (current state
+    is unaffected). Set wait_seconds>0 to get the task result inline.
     """
     cfg = require_config()
     if cfg:
         return cfg
     if not params.confirm:
-        return missing_confirm("proxmox_delete_snapshot")
-    if not params.i_understand_data_loss:
-        return missing_data_loss_ack("proxmox_delete_snapshot")
+        return missing_confirm(f"proxmox_snapshot (action={params.action})")
 
-    query = {"force": 1} if params.force else None
+    base = f"/nodes/{params.node}/{params.vm_type}/{params.vmid}/snapshot"
     try:
-        task_id = await http_client.delete(
-            f"/nodes/{params.node}/{params.vm_type}/{params.vmid}"
-            f"/snapshot/{params.snapname}",
-            params=query,
-        )
+        if params.action == "create":
+            payload = {"snapname": params.snapname}
+            if params.description:
+                payload["description"] = params.description
+            task_id = await http_client.post(base, data=payload)
+            verb = "creation"
+        elif params.action == "rollback":
+            task_id = await http_client.post(f"{base}/{params.snapname}/rollback")
+            verb = "rollback"
+        else:  # delete
+            if not params.i_understand_data_loss:
+                return missing_data_loss_ack("proxmox_snapshot (action=delete)")
+            query = {"force": 1} if params.force else None
+            task_id = await http_client.delete(
+                f"{base}/{params.snapname}", params=query
+            )
+            verb = "deletion"
     except Exception as exc:
         return http_client.format_http_error(exc)
+
+    suffix = await http_client.wait_for_task(params.node, task_id, params.wait_seconds)
     return (
-        f"OK: Snapshot '{params.snapname}' deletion started for "
-        f"{params.vm_type} {params.vmid}. Task: {task_id}"
+        f"OK: Snapshot '{params.snapname}' {verb} started for "
+        f"{params.vm_type} {params.vmid}. Task: {task_id}.{suffix}"
     )

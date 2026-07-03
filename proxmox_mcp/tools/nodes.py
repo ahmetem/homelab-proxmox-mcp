@@ -19,11 +19,7 @@ from proxmox_mcp.models import FormatInput, NodeInput, ResponseFormat
     },
 )
 async def proxmox_list_nodes(params: FormatInput = FormatInput()) -> str:
-    """List all nodes in the Proxmox cluster with status and resource usage.
-
-    Returns:
-        str: For each node: name, status, uptime, CPU, memory.
-    """
+    """List all nodes in the Proxmox cluster with status and resource usage."""
     cfg = require_config()
     if cfg:
         return cfg
@@ -33,7 +29,7 @@ async def proxmox_list_nodes(params: FormatInput = FormatInput()) -> str:
         return http_client.format_http_error(exc)
 
     if params.response_format == ResponseFormat.JSON:
-        return compact_json(nodes)
+        return compact_json(nodes, fields=params.fields)
 
     if not nodes:
         return "_No nodes found._"
@@ -64,11 +60,7 @@ async def proxmox_list_nodes(params: FormatInput = FormatInput()) -> str:
     },
 )
 async def proxmox_get_node_status(params: NodeInput) -> str:
-    """Get detailed status for a node: CPU, memory, disk, load average, kernel.
-
-    Returns:
-        str: Detailed node metrics in markdown or JSON.
-    """
+    """Get detailed status for a node: CPU, memory, disk, load average, kernel."""
     cfg = require_config()
     if cfg:
         return cfg
@@ -78,7 +70,7 @@ async def proxmox_get_node_status(params: NodeInput) -> str:
         return http_client.format_http_error(exc)
 
     if params.response_format == ResponseFormat.JSON:
-        return compact_json(status)
+        return compact_json(status, fields=params.fields)
 
     cpu = status.get("cpuinfo", {}) or {}
     mem = status.get("memory", {}) or {}

@@ -1,7 +1,8 @@
 """VM and container lifecycle / status / resize tools."""
 from __future__ import annotations
 
-from typing import Any
+import time
+from typing import Any, Optional
 
 from proxmox_mcp import http_client
 from proxmox_mcp.config import require_config
@@ -14,10 +15,10 @@ from proxmox_mcp.format import (
 )
 from proxmox_mcp.mcp_instance import mcp
 from proxmox_mcp.models import (
-    FormatInput,
     ResponseFormat,
-    VMActionInput,
     VMInput,
+    VMListInput,
+    VMPowerInput,
     VMResizeInput,
 )
 
@@ -25,18 +26,18 @@ from proxmox_mcp.models import (
 @mcp.tool(
     name="proxmox_list_vms",
     annotations={
-        "title": "List All VMs and Containers",
+        "title": "List VMs and Containers",
         "readOnlyHint": True,
         "destructiveHint": False,
         "idempotentHint": True,
         "openWorldHint": True,
     },
 )
-async def proxmox_list_vms(params: FormatInput = FormatInput()) -> str:
-    """List all virtual machines and LXC containers across the cluster.
+async def proxmox_list_vms(params: VMListInput = VMListInput()) -> str:
+    """List virtual machines and LXC containers across the cluster.
 
-    Returns:
-        str: For each VM/CT: ID, name, type, node, status, CPU, memory.
+    Optional filters: node, vmid, status ('running'/'stopped'),
+    guest_type ('qemu'/'lxc'). Use them to avoid dumping the full guest list.
     """
     cfg = require_config()
     if cfg:
@@ -46,11 +47,19 @@ async def proxmox_list_vms(params: FormatInput = FormatInput()) -> str:
     except Exception as exc:
         return http_client.format_http_error(exc)
 
+    vms = [
+        v for v in (vms or [])
+        if (params.node is None or v.get("node") == params.node)
+        and (params.vmid is None or v.get("vmid") == params.vmid)
+        and (params.status is None or v.get("status") == params.status)
+        and (params.guest_type is None or v.get("type") == params.guest_type)
+    ]
+
     if params.response_format == ResponseFormat.JSON:
-        return compact_json(vms)
+        return compact_json(vms, fields=params.fields)
 
     if not vms:
-        return "_No VMs or containers found._"
+        return "_No matching VMs or containers._"
 
     lines = ["## Virtual Machines and Containers", ""]
     for v in sorted(vms, key=lambda x: x.get("vmid", 0)):
@@ -82,11 +91,7 @@ async def proxmox_list_vms(params: FormatInput = FormatInput()) -> str:
     },
 )
 async def proxmox_get_vm_status(params: VMInput) -> str:
-    """Get detailed status of a specific VM or LXC container.
-
-    Returns:
-        str: Detailed runtime metrics for the VM/container.
-    """
+    """Get detailed runtime status of a specific VM or LXC container."""
     cfg = require_config()
     if cfg:
         return cfg
@@ -99,7 +104,7 @@ async def proxmox_get_vm_status(params: VMInput) -> str:
         return http_client.format_http_error(exc)
 
     if params.response_format == ResponseFormat.JSON:
-        return compact_json(status)
+        return compact_json(status, fields=params.fields)
 
     icon = status_icon(status.get("status", "?"))
     vmtype = "LXC Container" if actual_type == "lxc" else "QEMU VM"
@@ -125,122 +130,82 @@ async def proxmox_get_vm_status(params: VMInput) -> str:
     return "\n".join(lines)
 
 
+# vmid -> (guest type, monotonic timestamp). Power actions and status reads
+# both need the qemu/lxc distinction; a short TTL avoids re-fetching the whole
+# cluster resource list on every call in a burst of related operations.
+_VM_TYPE_CACHE: dict[int, tuple[str, float]] = {}
+_VM_TYPE_TTL = 30.0
+
+
 async def _resolve_vm_type(node: str, vmid: int, hint: str = "qemu") -> str:
     """Detect whether vmid is a 'qemu' VM or an 'lxc' container by querying the
-    cluster resource list. Falls back to `hint` if detection fails, so the
-    result is never worse than the caller-supplied type. This prevents a wrong
-    or defaulted vm_type from misrouting an action (e.g. starting an LXC via
-    the qemu endpoint, which silently no-ops)."""
+    cluster resource list (cached for a short TTL). Falls back to `hint` if
+    detection fails, so the result is never worse than the caller-supplied
+    type. This prevents a wrong or defaulted vm_type from misrouting an action
+    (e.g. starting an LXC via the qemu endpoint, which silently no-ops)."""
+    cached = _VM_TYPE_CACHE.get(vmid)
+    if cached and time.monotonic() - cached[1] < _VM_TYPE_TTL:
+        return cached[0]
     try:
         resources = await http_client.get("/cluster/resources", params={"type": "vm"})
+        now = time.monotonic()
+        found: Optional[str] = None
         for r in resources or []:
-            if r.get("vmid") == vmid and (not node or r.get("node") == node):
-                t = r.get("type")
-                if t in ("qemu", "lxc"):
-                    return t
+            t = r.get("type")
+            r_vmid = r.get("vmid")
+            if t in ("qemu", "lxc") and isinstance(r_vmid, int):
+                _VM_TYPE_CACHE[r_vmid] = (t, now)
+                if r_vmid == vmid and (not node or r.get("node") == node):
+                    found = t
+        if found:
+            return found
     except Exception:
         pass
     return hint if hint in ("qemu", "lxc") else "qemu"
 
 
-async def _vm_action(node: str, vmid: int, vm_type: str, action: str) -> str:
-    """Send a power action to a VM/CT. Auto-detects the guest type from vmid so
-    a wrong/default vm_type cannot misroute the request. Returns result msg."""
-    actual_type = await _resolve_vm_type(node, vmid, hint=vm_type)
+@mcp.tool(
+    name="proxmox_vm_power",
+    annotations={
+        "title": "VM/Container Power Action (start/shutdown/stop/reboot)",
+        "readOnlyHint": False,
+        "destructiveHint": True,
+        "idempotentHint": False,
+        "openWorldHint": True,
+    },
+)
+async def proxmox_vm_power(params: VMPowerInput) -> str:
+    """Power action on a VM or LXC container. Requires confirm=true.
+
+    Actions: 'start', 'shutdown' (graceful ACPI), 'stop' (pull-the-plug,
+    may cause data loss), 'reboot'. The guest type (qemu/lxc) is
+    auto-detected from vmid. Set wait_seconds>0 to poll the task and get the
+    final result inline instead of just a task ID.
+    """
+    cfg = require_config()
+    if cfg:
+        return cfg
+    if not params.confirm:
+        return missing_confirm("proxmox_vm_power")
+
+    actual_type = await _resolve_vm_type(params.node, params.vmid, hint=params.vm_type)
     try:
         task_id = await http_client.post(
-            f"/nodes/{node}/{actual_type}/{vmid}/status/{action}"
+            f"/nodes/{params.node}/{actual_type}/{params.vmid}/status/{params.action}"
         )
     except Exception as exc:
         return http_client.format_http_error(exc)
+
     note = ""
-    if actual_type != vm_type:
-        note = f" (auto-detected '{actual_type}', given '{vm_type}')"
+    if actual_type != params.vm_type:
+        note = f" (auto-detected '{actual_type}', given '{params.vm_type}')"
+    suffix = await http_client.wait_for_task(params.node, task_id, params.wait_seconds)
+    if not suffix:
+        suffix = " Use proxmox_get_vm_status to confirm new state."
     return (
-        f"OK: Action '{action}' on {actual_type} {vmid} accepted{note}. "
-        f"Task ID: {task_id}. "
-        "Use proxmox_get_vm_status to confirm new state."
+        f"OK: Action '{params.action}' on {actual_type} {params.vmid} "
+        f"accepted{note}. Task: {task_id}.{suffix}"
     )
-
-
-@mcp.tool(
-    name="proxmox_vm_start",
-    annotations={
-        "title": "Start VM/Container",
-        "readOnlyHint": False,
-        "destructiveHint": False,
-        "idempotentHint": True,
-        "openWorldHint": True,
-    },
-)
-async def proxmox_vm_start(params: VMActionInput) -> str:
-    """Start a VM or LXC container. Requires confirm=true."""
-    cfg = require_config()
-    if cfg:
-        return cfg
-    if not params.confirm:
-        return missing_confirm("proxmox_vm_start")
-    return await _vm_action(params.node, params.vmid, params.vm_type, "start")
-
-
-@mcp.tool(
-    name="proxmox_vm_shutdown",
-    annotations={
-        "title": "Graceful Shutdown",
-        "readOnlyHint": False,
-        "destructiveHint": True,
-        "idempotentHint": False,
-        "openWorldHint": True,
-    },
-)
-async def proxmox_vm_shutdown(params: VMActionInput) -> str:
-    """Gracefully shutdown a VM or LXC container via ACPI. Requires confirm=true."""
-    cfg = require_config()
-    if cfg:
-        return cfg
-    if not params.confirm:
-        return missing_confirm("proxmox_vm_shutdown")
-    return await _vm_action(params.node, params.vmid, params.vm_type, "shutdown")
-
-
-@mcp.tool(
-    name="proxmox_vm_stop",
-    annotations={
-        "title": "Force Stop VM/Container",
-        "readOnlyHint": False,
-        "destructiveHint": True,
-        "idempotentHint": True,
-        "openWorldHint": True,
-    },
-)
-async def proxmox_vm_stop(params: VMActionInput) -> str:
-    """Force stop (pull-the-plug) a VM or container. May cause data loss. Requires confirm=true."""
-    cfg = require_config()
-    if cfg:
-        return cfg
-    if not params.confirm:
-        return missing_confirm("proxmox_vm_stop")
-    return await _vm_action(params.node, params.vmid, params.vm_type, "stop")
-
-
-@mcp.tool(
-    name="proxmox_vm_reboot",
-    annotations={
-        "title": "Reboot VM/Container",
-        "readOnlyHint": False,
-        "destructiveHint": True,
-        "idempotentHint": False,
-        "openWorldHint": True,
-    },
-)
-async def proxmox_vm_reboot(params: VMActionInput) -> str:
-    """Reboot a VM or container (graceful then power-cycle). Requires confirm=true."""
-    cfg = require_config()
-    if cfg:
-        return cfg
-    if not params.confirm:
-        return missing_confirm("proxmox_vm_reboot")
-    return await _vm_action(params.node, params.vmid, params.vm_type, "reboot")
 
 
 @mcp.tool(
@@ -257,17 +222,9 @@ async def proxmox_resize_vm(params: VMResizeInput) -> str:
     """Change RAM and/or CPU core count of a VM or LXC container.
 
     Requires confirm=true. At least one of memory_mb or cores must be provided.
-
-    Behavior:
-      - If the VM is stopped, change is immediate.
-      - If the VM is running, Proxmox attempts hot-resize. This usually works
-        for adding resources; reducing may need a reboot.
-      - If hot-resize cannot apply, the new value is saved and takes effect
-        on the next reboot. The task result indicates the situation.
-
-    For QEMU VMs, RAM hotplug may require the VM to have memory hotplug
-    enabled in its config (often it isn't by default); if so, a reboot
-    is needed for the new RAM to be visible to the guest OS.
+    Stopped guests change immediately; running guests hot-resize when possible,
+    otherwise the value applies on next reboot (QEMU RAM hotplug often needs
+    to be enabled in the VM config).
     """
     cfg = require_config()
     if cfg:
@@ -303,6 +260,6 @@ async def proxmox_resize_vm(params: VMResizeInput) -> str:
         msg += f" Task: {result}."
     msg += (
         " If the VM was running and the guest OS does not reflect the change, "
-        "a reboot may be required (use proxmox_vm_reboot)."
+        "a reboot may be required (use proxmox_vm_power action='reboot')."
     )
     return msg
