@@ -128,7 +128,7 @@ token can't perform. They need the SSH configuration described in the
 | Tool | Description |
 |---|---|
 | `proxmox_host_exec` | Run an arbitrary shell command on the Proxmox host over SSH. Requires `confirm=true`; commands matching destructive patterns also require `i_understand_data_loss=true`. Every call is appended to `_host_ssh_audit.log`. |
-| `proxmox_host_read_exec` | Run a single **read-only**, allow-listed command on the Proxmox host (`cat`, `tail`, `journalctl`, `zpool status`, `systemctl status`, `pct`/`qm config`, …). No `confirm` needed — rejects shell metacharacters (pipes/redirects/substitution/chaining), non-allow-listed binaries, mutating subcommands, and hanging/state-changing flags. Safe to grant to read-only agents. |
+| `proxmox_host_read_exec` | Run a single **read-only**, allow-listed command on the Proxmox host. Broad diagnostic coverage: files/text (`cat`, `tail`, `grep`, `zcat`, …), storage (`lsblk`, `pvs`/`lvs`/`vgs`, `zpool status`, `zfs list`, `zdb`, `smartctl`, `nvme <read>`, `proxmox-boot-tool status`), hardware (`lspci`, `lsusb`, `lshw`, `dmidecode`, `dmesg`), processes/net (`ps`, `ss`, `lsof`, `ip`), services (`systemctl status/…`, `journalctl`, `coredumpctl list/info`), Proxmox (`pveversion`, `pct`/`qm config`, `pvesm`, `pvesh get`), packages (`dpkg-query`, `apt list`, `apt-cache`). No `confirm` needed — rejects shell metacharacters (pipes/redirects/substitution/chaining), non-allow-listed binaries, mutating subcommands, and write/state/hanging flags (`dmesg -C`, `dmidecode --dump-bin`, `tail -f`, …). Safe to grant to read-only agents. |
 
 ### LXC exec
 

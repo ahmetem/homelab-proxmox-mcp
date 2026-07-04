@@ -43,29 +43,70 @@ _FORBIDDEN_CHARS = set(";|&<>`$(){}!\\\n\r")
 # binary basename -> None (any args, read-only) | set of allowed read subcommands
 _ANY = None
 _READ_ALLOW: dict[str, Optional[set[str]]] = {
-    # Pure read utilities — any arguments are non-mutating.
+    # --- Pure read utilities — any arguments are non-mutating. ---
+    # Files / text (no in-place edit or write option on any of these).
     "cat": _ANY, "head": _ANY, "tail": _ANY, "ls": _ANY, "stat": _ANY,
-    "du": _ANY, "df": _ANY, "free": _ANY, "uptime": _ANY, "date": _ANY,
-    "hostname": _ANY, "uname": _ANY, "lsblk": _ANY, "findmnt": _ANY,
-    "wc": _ANY, "readlink": _ANY, "realpath": _ANY, "file": _ANY,
-    "lscpu": _ANY, "getconf": _ANY, "ps": _ANY, "ss": _ANY, "sensors": _ANY,
+    "du": _ANY, "df": _ANY, "wc": _ANY, "readlink": _ANY, "realpath": _ANY,
+    "file": _ANY, "findmnt": _ANY, "getfacl": _ANY, "nl": _ANY, "tac": _ANY,
+    "tree": _ANY, "grep": _ANY, "egrep": _ANY, "zgrep": _ANY, "zcat": _ANY,
+    # System / hardware info.
+    "free": _ANY, "uptime": _ANY, "date": _ANY, "hostname": _ANY,
+    "uname": _ANY, "arch": _ANY, "nproc": _ANY, "lscpu": _ANY,
+    "getconf": _ANY, "lsblk": _ANY, "lsmod": _ANY, "lspci": _ANY,
+    "lsusb": _ANY, "lsscsi": _ANY, "lshw": _ANY, "sensors": _ANY,
+    "dmidecode": _ANY,  # write flag --dump-bin is blocked in _DENIED_FLAGS
+    "dmesg": _ANY,      # clear/console/-follow flags blocked in _DENIED_FLAGS
+    # Processes / network / users.
+    "ps": _ANY, "ss": _ANY, "lsof": _ANY, "pgrep": _ANY, "pidof": _ANY,
+    "vmstat": _ANY, "iostat": _ANY, "mpstat": _ANY, "numastat": _ANY,
+    "who": _ANY, "w": _ANY, "last": _ANY, "id": _ANY, "groups": _ANY,
+    "whoami": _ANY, "getent": _ANY,
+    # LVM reporting (mutators are lvcreate/lvremove/pvcreate/… — separate bins).
+    "pvs": _ANY, "lvs": _ANY, "vgs": _ANY,
+    "pvdisplay": _ANY, "lvdisplay": _ANY, "vgdisplay": _ANY,
+    # ZFS / storage read tools.
+    "arcstat": _ANY, "arc_summary": _ANY, "zdb": _ANY,
+    # Proxmox / packages.
     "pveversion": _ANY, "journalctl": _ANY, "smartctl": _ANY,
-    "arcstat": _ANY, "arc_summary": _ANY,
-    # Subcommand-restricted — the binary can also mutate.
-    "zpool": {"status", "list", "get", "history", "iostat"},
-    "zfs": {"list", "get"},
+    "dpkg-query": _ANY, "apt-cache": _ANY,
+
+    # --- Subcommand-restricted — the binary can also mutate. ---
+    "zpool": {"status", "list", "get", "history", "iostat", "version"},
+    "zfs": {"list", "get", "version", "holds"},
     "systemctl": {"status", "show", "is-active", "is-enabled", "is-failed",
-                  "list-units", "list-timers", "list-unit-files", "cat"},
-    "pct": {"config", "list", "status", "listsnapshot", "df"},
-    "qm": {"config", "list", "status", "listsnapshot"},
-    "pvesm": {"status", "list"},
-    "ip": {"addr", "link", "route", "neigh", "a", "l", "r", "n"},
+                  "list-units", "list-timers", "list-unit-files", "cat",
+                  "list-jobs", "list-dependencies", "list-sockets",
+                  "get-default"},
+    "pct": {"config", "list", "status", "listsnapshot", "df", "pending"},
+    "qm": {"config", "list", "status", "listsnapshot", "pending", "showcmd"},
+    "pvesm": {"status", "list", "path", "apiinfo"},
+    "ip": {"addr", "link", "route", "neigh", "a", "l", "r", "n", "-s"},
     "pvesh": {"get"},
+    "proxmox-boot-tool": {"status"},
+    "nvme": {"list", "list-subsys", "smart-log", "id-ctrl", "id-ns",
+             "list-ns", "ns-descs", "error-log", "fw-log", "get-feature",
+             "get-log", "show-regs", "telemetry-log"},
+    "apt": {"list"},
+    "apt-mark": {"showhold", "showmanual", "showauto", "showinstall"},
+    "chronyc": {"tracking", "sources", "sourcestats", "activity",
+                "ntpdata", "serverstats", "selectdata", "clients"},
+    "coredumpctl": {"list", "info"},
 }
 
-# Per-binary flags that would hang the call or change state.
+# Per-binary flags that would hang the call, write a file, or change state.
+# Any argv token that exactly matches, or (for '=' forms) starts with, one of
+# these is refused. Covers the write/state escape hatches on otherwise-read
+# binaries listed as _ANY above.
 _FOLLOW_HANGS = {"tail", "journalctl"}
 _JOURNAL_BAD_FLAGS = {"--rotate", "--flush", "--sync"}
+_DENIED_FLAGS: dict[str, set[str]] = {
+    # dmesg can clear the ring buffer, toggle the console, set log level, follow.
+    "dmesg": {"-C", "--clear", "-c", "--read-clear", "-D", "--console-off",
+              "-E", "--console-on", "-n", "--console-level", "-w", "--follow",
+              "-W", "--follow-new"},
+    # dmidecode --dump-bin FILE / --dump write SMBIOS to a file.
+    "dmidecode": {"--dump-bin", "--dump"},
+}
 
 
 def validate_read_command(command: str) -> Optional[str]:
@@ -116,6 +157,15 @@ def validate_read_command(command: str) -> Optional[str]:
         a in ("-t", "--test") or a.startswith("--test=") for a in argv
     ):
         return "Refused: 'smartctl -t/--test' starts a device self-test (changes state)."
+
+    denied = _DENIED_FLAGS.get(binary)
+    if denied:
+        for a in argv[1:]:
+            if a in denied or a.split("=", 1)[0] in denied:
+                return (
+                    f"Refused: '{binary} {a}' can clear/write state or block; "
+                    "not allowed in read-only mode."
+                )
 
     # Final backstop: shared destructive-pattern detector.
     danger = host_ssh.is_destructive(command)

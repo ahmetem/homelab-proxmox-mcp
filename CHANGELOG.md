@@ -5,6 +5,29 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] - 2026-07-04
+
+### Added
+- **`proxmox_host_read_exec` read-only allow-list greatly expanded** for host
+  diagnostics (all additions are genuinely non-mutating; the safety model —
+  no shell metacharacters, subcommand restriction for mutable binaries, and the
+  `is_destructive` backstop — is unchanged). New pure-read binaries: LVM
+  reporting (`pvs`, `lvs`, `vgs`, `pvdisplay`, `lvdisplay`, `vgdisplay`),
+  hardware (`lspci`, `lsusb`, `lsscsi`, `lsmod`, `lshw`, `dmidecode`),
+  process/network (`lsof`, `pgrep`, `pidof`, `vmstat`, `iostat`, `mpstat`,
+  `numastat`), users (`id`, `groups`, `whoami`, `getent`, `who`, `w`, `last`),
+  text/file (`grep`, `egrep`, `zgrep`, `zcat`, `getfacl`, `nl`, `tac`, `tree`),
+  ZFS `zdb`, packages (`dpkg-query`, `apt-cache`), and `dmesg`. New
+  subcommand-restricted: `proxmox-boot-tool status`, `nvme <read-subcmds>`,
+  `apt list`, `apt-mark show*`, `chronyc <read-subcmds>`, `coredumpctl
+  list/info`; extended read subcommands on `zpool`, `zfs`, `systemctl`, `qm`,
+  `pct`, `pvesm`.
+- **`_DENIED_FLAGS` guard** blocks the write/state escape hatches on otherwise
+  read-only binaries: `dmesg -C/-c/-n/--console-*/-w` (clear ring buffer / set
+  console level / follow) and `dmidecode --dump-bin/--dump` (writes SMBIOS to a
+  file). Mutating LVM/nvme/apt operations stay refused (not allow-listed, or the
+  wrong subcommand). Expanded `tests/test_host_read.py` (11/11 pass).
+
 ## [1.0.0] - 2026-07-03
 
 Token-efficiency and effectiveness overhaul. **BREAKING**: 16 tools were

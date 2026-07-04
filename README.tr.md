@@ -129,7 +129,7 @@ bölümündeki SSH ayarlarını gerektirir.
 | Araç | Açıklama |
 |---|---|
 | `proxmox_host_exec` | Proxmox host'ta SSH üzerinden serbest shell komutu çalıştırır. `confirm=true` gerektirir; yıkıcı pattern'lere uyan komutlar ayrıca `i_understand_data_loss=true` ister. Her çağrı `_host_ssh_audit.log`'a yazılır. |
-| `proxmox_host_read_exec` | Proxmox host'ta tek bir **salt-okuma**, allowlist'li komut çalıştırır (`cat`, `tail`, `journalctl`, `zpool status`, `systemctl status`, `pct`/`qm config`, …). `confirm` gerekmez — shell metakarakterlerini (pipe/redirect/substitution/zincirleme), allowlist-dışı binary'leri, mutasyon alt-komutlarını ve askıda kalan/durum değiştiren bayrakları reddeder. Salt-okuma ajanlara güvenle verilebilir. |
+| `proxmox_host_read_exec` | Proxmox host'ta tek bir **salt-okuma**, allowlist'li komut çalıştırır. Geniş tanılama kapsamı: dosya/metin (`cat`, `tail`, `grep`, `zcat`, …), depolama (`lsblk`, `pvs`/`lvs`/`vgs`, `zpool status`, `zfs list`, `zdb`, `smartctl`, `nvme <read>`, `proxmox-boot-tool status`), donanım (`lspci`, `lsusb`, `lshw`, `dmidecode`, `dmesg`), süreç/ağ (`ps`, `ss`, `lsof`, `ip`), servisler (`systemctl status/…`, `journalctl`, `coredumpctl list/info`), Proxmox (`pveversion`, `pct`/`qm config`, `pvesm`, `pvesh get`), paketler (`dpkg-query`, `apt list`, `apt-cache`). `confirm` gerekmez — shell metakarakterlerini, allowlist-dışı binary'leri, mutasyon alt-komutlarını ve yazma/durum/askı bayraklarını (`dmesg -C`, `dmidecode --dump-bin`, `tail -f`, …) reddeder. Salt-okuma ajanlara güvenle verilebilir. |
 
 ### LXC exec
 
