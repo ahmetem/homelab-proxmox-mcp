@@ -37,6 +37,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   masking, gateway/ip validation, restore preview via a monkeypatched probe)
   and `tests/test_audit.py` (chain integrity, tamper / mid- and head-deletion
   detection, HMAC mode, wrong-key rejection).
+- `pyproject.toml` — PyPI/uvx packaging with a console entry point
+  (`proxmox-mcp` = `proxmox_mcp.server:main`), enabling one-command install via
+  the `proxmox-mcp-suite` Claude Code marketplace.
 
 ### Changed
 - Shared `mask_secrets()` + `dry_run_preview()` helpers added to
