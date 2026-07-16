@@ -96,6 +96,30 @@ def project_fields(obj: Any, fields: Any) -> Any:
     return obj
 
 
+# Payload keys whose values must never surface in a dry-run preview or log.
+_SECRET_PAYLOAD_KEYS = {"password", "ssh-public-keys", "cipassword"}
+
+
+def mask_secrets(payload: dict) -> dict:
+    """Replace secret values with '***' (leaves empty/None untouched so a
+    preview still shows the field is unset)."""
+    return {
+        k: ("***" if k in _SECRET_PAYLOAD_KEYS and v not in (None, "") else v)
+        for k, v in payload.items()
+    }
+
+
+def dry_run_preview(method: str, path: str, payload: dict) -> str:
+    """Uniform 'here's exactly what I would send' preview for state-changing
+    tools that support dry_run. Secrets are masked."""
+    return (
+        "DRY RUN — no changes made.\n"
+        f"Would call: `{method} {path}`\n"
+        f"Payload: {compact_json(mask_secrets(payload))}\n\n"
+        "Re-run with dry_run=false, confirm=true to apply."
+    )
+
+
 def compact_json(obj: Any, limit: int = 8000, fields: Any = None) -> str:
     """Serialize `obj` to compact JSON (no indent whitespace) and hard-cap the
     length. Used by the opt-in `response_format=json` branches.

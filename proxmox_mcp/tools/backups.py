@@ -7,6 +7,7 @@ from proxmox_mcp import http_client
 from proxmox_mcp.config import require_config
 from proxmox_mcp.format import (
     compact_json,
+    dry_run_preview,
     fmt_bytes,
     missing_confirm,
     missing_data_loss_ack,
@@ -135,14 +136,11 @@ async def proxmox_restore_backup(params: BackupRestoreInput) -> str:
     Refuses to overwrite an existing VMID unless force=true AND
     i_understand_data_loss=true (overwrite destroys the current guest's disks
     first). Requires confirm=true. Set wait_seconds>0 to poll the restore task.
+    Pass dry_run=true to preview the endpoint + payload without restoring.
     """
     cfg = require_config()
     if cfg:
         return cfg
-    if not params.confirm:
-        return missing_confirm("proxmox_restore_backup")
-    if params.force and not params.i_understand_data_loss:
-        return missing_data_loss_ack("proxmox_restore_backup")
 
     # Refuse silent overwrite: probe whether the target VMID already exists.
     # /cluster/resources is a single cheap call that lists every VM/CT.
@@ -188,6 +186,15 @@ async def proxmox_restore_backup(params: BackupRestoreInput) -> str:
         payload["storage"] = params.storage
     if params.start_after_restore:
         payload["start"] = 1
+
+    if params.dry_run:
+        effect = ("OVERWRITE existing guest (force)" if existing is not None
+                  else "fresh restore")
+        return dry_run_preview("POST", endpoint, payload) + f"\nEffect: {effect}."
+    if not params.confirm:
+        return missing_confirm("proxmox_restore_backup")
+    if params.force and not params.i_understand_data_loss:
+        return missing_data_loss_ack("proxmox_restore_backup")
 
     try:
         task_id = await http_client.post(endpoint, data=payload)

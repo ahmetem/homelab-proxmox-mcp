@@ -5,6 +5,50 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2026-07-17
+
+### Added
+- **Guest creation from scratch** — closes the biggest capability gap vs. other
+  Proxmox MCP servers (they had create; we only had clone):
+  - `proxmox_create_vm` — QEMU VM with core hardware (cores/sockets/memory/
+    ostype), one virtio-scsi boot disk, one virtio NIC, and an optional install
+    ISO (boots from the CD first). Requires `confirm=true`.
+  - `proxmox_create_container` — LXC from a template with rootfs, one NIC (dhcp
+    or a static CIDR), root access via `password` and/or `ssh_public_key`,
+    unprivileged by default, optional `nesting`. Requires `confirm=true`.
+  - Medium scope by design: cloud-init, multi-disk and multi-NIC are left out
+    for now; add them afterwards with the config/resize tools.
+- **`dry_run` preview** on the high-consequence mutations `proxmox_create_vm`,
+  `proxmox_create_container`, `proxmox_clone_vm`, and `proxmox_restore_backup`.
+  With `dry_run=true` the tool returns the exact endpoint + payload it would
+  send (secrets masked) instead of executing. `proxmox_restore_backup` still
+  runs its read-only existence probe first, so the preview reports whether the
+  restore would be a fresh create or an overwrite.
+- **Tamper-evident audit log** (`proxmox_mcp/audit.py`). The host- and
+  guest-SSH audit logs are now hash-chained: each entry carries `prev` + `hash`
+  (SHA-256, or HMAC-SHA256 when `PROXMOX_AUDIT_HMAC_KEY` is set), so altering,
+  deleting (including from the head of the chain) or reordering any line is
+  detectable.
+  - `proxmox_audit_verify` — new read-only tool that recomputes the chain and
+    reports INTACT / BROKEN with the first offending line. Pre-existing legacy
+    lines (from before this release) are tolerated and don't break the chain
+    that follows them.
+- `tests/test_guest_create.py` (create models, dry_run previews, secret
+  masking, gateway/ip validation, restore preview via a monkeypatched probe)
+  and `tests/test_audit.py` (chain integrity, tamper / mid- and head-deletion
+  detection, HMAC mode, wrong-key rejection).
+
+### Changed
+- Shared `mask_secrets()` + `dry_run_preview()` helpers added to
+  `proxmox_mcp/format.py`, used by all four dry_run-capable tools.
+- Tool count 49 → 52.
+
+### Security
+- Optional `PROXMOX_AUDIT_HMAC_KEY` upgrades the audit chain from
+  integrity-evident (catches accidental corruption, truncation and deletion)
+  to tamper-evident (an attacker who cannot read the key cannot forge a valid
+  chain).
+
 ## [1.1.0] - 2026-07-04
 
 ### Added

@@ -11,7 +11,7 @@ should work — every tool accepts a `node` parameter.
 
 ## Features
 
-The package exposes **49 tools**, grouped by category below. Read-only
+The package exposes **52 tools**, grouped by category below. Read-only
 tools are safe to call automatically; every state-changing tool requires
 `confirm=true`, and tools that destroy persistent data additionally
 require `i_understand_data_loss=true` (see **Built-in safety**).
@@ -47,6 +47,13 @@ Token-efficiency features (v1.0):
 | `proxmox_vm_power` | Power action: `action='start' \| 'shutdown' \| 'stop' \| 'reboot'` (guest type auto-detected) |
 | `proxmox_resize_vm` | Change RAM (`memory_mb`) and/or CPU `cores` of a VM/CT |
 
+### Guest creation (from scratch)
+
+| Tool | Description |
+|---|---|
+| `proxmox_create_vm` | Create a QEMU VM: core hardware (cores/sockets/memory/ostype), one virtio-scsi boot disk, one virtio NIC, optional install ISO (boots from the CD first). Requires `confirm=true`; `dry_run=true` previews the exact payload without creating. |
+| `proxmox_create_container` | Create an LXC container from a template: rootfs, one NIC (dhcp or static CIDR), root access via `password` and/or `ssh_public_key`, unprivileged by default, optional `nesting`. Requires `confirm=true`; `dry_run=true` previews (secrets masked). |
+
 ### Snapshots
 
 | Tool | Description |
@@ -60,7 +67,7 @@ Token-efficiency features (v1.0):
 |---|---|
 | `proxmox_list_backups` | Backup files on a storage, newest first; filters: `vmid`, `limit` (read-only) |
 | `proxmox_create_backup` | Create a backup with selectable mode and compression |
-| `proxmox_restore_backup` | Restore a VM/CT from a backup archive. Refuses to overwrite an existing VMID unless `force=true` and `i_understand_data_loss=true`. |
+| `proxmox_restore_backup` | Restore a VM/CT from a backup archive. Refuses to overwrite an existing VMID unless `force=true` and `i_understand_data_loss=true`. `dry_run=true` previews the endpoint + payload and reports whether it would be a fresh restore or an overwrite. |
 
 ### Storage (read-only)
 
@@ -109,7 +116,7 @@ token can't perform. They need the SSH configuration described in the
 | Tool | Description |
 |---|---|
 | `proxmox_move_disk` | Move a VM disk to another storage |
-| `proxmox_clone_vm` | Clone a VM/CT to a new VMID |
+| `proxmox_clone_vm` | Clone a VM/CT to a new VMID. `dry_run=true` previews the payload without cloning. |
 | `proxmox_list_isos` | List ISO images available on storages (read-only) |
 | `proxmox_zfs_pool_status` | `zpool status` for a pool: health, errors, scrub state (read-only) |
 | `proxmox_zfs_scrub` | Start a scrub on a ZFS pool |
@@ -129,6 +136,12 @@ token can't perform. They need the SSH configuration described in the
 |---|---|
 | `proxmox_host_exec` | Run an arbitrary shell command on the Proxmox host over SSH. Requires `confirm=true`; commands matching destructive patterns also require `i_understand_data_loss=true`. Every call is appended to `_host_ssh_audit.log`. |
 | `proxmox_host_read_exec` | Run a single **read-only**, allow-listed command on the Proxmox host. Broad diagnostic coverage: files/text (`cat`, `tail`, `grep`, `zcat`, …), storage (`lsblk`, `pvs`/`lvs`/`vgs`, `zpool status`, `zfs list`, `zdb`, `smartctl`, `nvme <read>`, `proxmox-boot-tool status`), hardware (`lspci`, `lsusb`, `lshw`, `dmidecode`, `dmesg`), processes/net (`ps`, `ss`, `lsof`, `ip`), services (`systemctl status/…`, `journalctl`, `coredumpctl list/info`), Proxmox (`pveversion`, `pct`/`qm config`, `pvesm`, `pvesh get`), packages (`dpkg-query`, `apt list`, `apt-cache`). No `confirm` needed — rejects shell metacharacters (pipes/redirects/substitution/chaining), non-allow-listed binaries, mutating subcommands, and write/state/hanging flags (`dmesg -C`, `dmidecode --dump-bin`, `tail -f`, …). Safe to grant to read-only agents. |
+
+### Audit-log integrity
+
+| Tool | Description |
+|---|---|
+| `proxmox_audit_verify` | Verify the tamper-evident hash chain of the SSH audit logs (`which='host' \| 'vm' \| 'all'`). Every host/guest shell exec is appended as a hash-chained line (SHA-256, or HMAC-SHA256 when `PROXMOX_AUDIT_HMAC_KEY` is set); this recomputes the chain and reports INTACT/BROKEN with the first offending line. Read-only. |
 
 ### LXC exec
 
@@ -157,6 +170,12 @@ destroy, etc.) additionally require `i_understand_data_loss=true`. The
 agent must explicitly pass both flags, which in practice means Claude
 only fires these after the user clearly asks for the action. Read-only
 tools have no such guard.
+
+The highest-consequence mutations — `proxmox_create_vm`,
+`proxmox_create_container`, `proxmox_clone_vm` and `proxmox_restore_backup` —
+also accept `dry_run=true`, which returns the exact API call they would make
+(secrets masked) without executing it. Every host/guest SSH exec is recorded
+in a hash-chained audit log you can check any time with `proxmox_audit_verify`.
 
 ## Requirements
 
@@ -362,6 +381,12 @@ separately in `vm_ssh_hosts.json`.
 | `PROXMOX_SSH_PASSWORD` | — | Password auth (fallback if no key) |
 | `PROXMOX_SSH_KNOWN_HOSTS` | — | Path to a known_hosts file; `ignore` skips host-key verification (trusted LAN only) |
 | `PROXMOX_SSH_TIMEOUT` | `30` | SSH connect timeout in seconds |
+
+### Audit log (optional)
+
+| Variable | Default | Description |
+|---|---|---|
+| `PROXMOX_AUDIT_HMAC_KEY` | — | If set, the SSH audit log is hash-chained with HMAC-SHA256 (tamper-evident) instead of plain SHA-256 (integrity-evident). Keep it secret and stable — changing it makes older lines fail verification. Check the chain with `proxmox_audit_verify`. |
 
 ## Security notes
 

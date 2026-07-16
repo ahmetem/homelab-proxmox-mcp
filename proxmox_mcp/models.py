@@ -231,6 +231,10 @@ class BackupRestoreInput(BaseModel):
         description="Power on the guest as soon as the restore completes.",
     )
     confirm: bool = Field(default=False)
+    dry_run: bool = Field(
+        default=False,
+        description="Preview the restore endpoint + payload without restoring.",
+    )
     i_understand_data_loss: bool = Field(
         default=False,
         description=(

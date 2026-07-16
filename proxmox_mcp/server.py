@@ -63,6 +63,9 @@ TOOLS = [
     "proxmox_zfs_create_snapshot",
     "proxmox_zfs_list_datasets",
     "proxmox_zfs_destroy_snapshots_by_pattern",
+    # Guest creation from scratch (VM + LXC)
+    "proxmox_create_vm",
+    "proxmox_create_container",
     # VM disk movement / clone / ISO listing
     "proxmox_move_disk",
     "proxmox_clone_vm",
@@ -80,6 +83,8 @@ TOOLS = [
     "proxmox_host_exec",
     # Proxmox host SSH (allow-listed read-only exec)
     "proxmox_host_read_exec",
+    # Audit-log integrity (tamper-evident hash chain)
+    "proxmox_audit_verify",
     # LXC container exec via pct exec (typed wrapper on host SSH)
     "proxmox_lxc_exec",
     "proxmox_ct_service_action",

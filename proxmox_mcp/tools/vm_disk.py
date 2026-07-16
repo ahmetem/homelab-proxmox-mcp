@@ -19,7 +19,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from proxmox_mcp import http_client
 from proxmox_mcp.config import require_config
-from proxmox_mcp.format import compact_json, fmt_bytes, missing_confirm
+from proxmox_mcp.format import compact_json, dry_run_preview, fmt_bytes, missing_confirm
 from proxmox_mcp.mcp_instance import mcp
 from proxmox_mcp.models import WAIT_DESC, ResponseFormat
 
@@ -109,6 +109,10 @@ class CloneVmInput(BaseModel):
     )
     description: Optional[str] = Field(default=None, max_length=200)
     confirm: bool = Field(default=False)
+    dry_run: bool = Field(
+        default=False,
+        description="Preview the clone endpoint + payload without cloning.",
+    )
     wait_seconds: int = Field(default=0, ge=0, le=600, description=WAIT_DESC)
     reason: Optional[str] = Field(default=None, max_length=200)
 
@@ -206,13 +210,11 @@ async def proxmox_clone_vm(params: CloneVmInput) -> str:
 
     Use snapname to clone from a specific snapshot rather than the live state.
 
-    Requires confirm=true.
+    Requires confirm=true. Pass dry_run=true to preview without cloning.
     """
     cfg = require_config()
     if cfg:
         return cfg
-    if not params.confirm:
-        return missing_confirm("proxmox_clone_vm")
     if params.newid == params.vmid:
         return "Error: newid must differ from source vmid."
 
@@ -231,6 +233,11 @@ async def proxmox_clone_vm(params: CloneVmInput) -> str:
         payload["snapname"] = params.snapname
     if params.description:
         payload["description"] = params.description
+
+    if params.dry_run:
+        return dry_run_preview("POST", path, payload)
+    if not params.confirm:
+        return missing_confirm("proxmox_clone_vm")
 
     try:
         task_id = await http_client.post(path, data=payload)

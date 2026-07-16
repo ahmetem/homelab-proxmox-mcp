@@ -12,7 +12,7 @@ kümelerde de çalışır — her araç bir `node` parametresi alır.
 
 ## Özellikler
 
-Paket **49 araç** sunar; aşağıda kategoriye göre gruplanmıştır.
+Paket **52 araç** sunar; aşağıda kategoriye göre gruplanmıştır.
 Salt-okunur araçlar otomatik çağrılabilir; durum değiştiren her araç
 `confirm=true`, kalıcı veri silen araçlar ayrıca
 `i_understand_data_loss=true` gerektirir (bkz. **Güvenlik**).
@@ -48,6 +48,13 @@ Token verimliliği özellikleri (v1.0):
 | `proxmox_vm_power` | Güç aksiyonu: `action='start' \| 'shutdown' \| 'stop' \| 'reboot'` (guest türü otomatik saptanır) |
 | `proxmox_resize_vm` | VM/CT'nin RAM (`memory_mb`) ve/veya CPU `cores` değerini değiştirir |
 
+### Guest oluşturma (sıfırdan)
+
+| Araç | Açıklama |
+|---|---|
+| `proxmox_create_vm` | QEMU VM oluşturur: temel donanım (cores/sockets/memory/ostype), bir virtio-scsi boot diski, bir virtio NIC, opsiyonel kurulum ISO'su (önce CD'den boot eder). `confirm=true` gerektirir; `dry_run=true` oluşturmadan payload'ı önizler. |
+| `proxmox_create_container` | Bir template'ten LXC container oluşturur: rootfs, bir NIC (dhcp veya statik CIDR), `password` ve/veya `ssh_public_key` ile root erişimi, varsayılan unprivileged, opsiyonel `nesting`. `confirm=true` gerektirir; `dry_run=true` önizler (secret'lar maskeli). |
+
 ### Snapshot'lar
 
 | Araç | Açıklama |
@@ -61,7 +68,7 @@ Token verimliliği özellikleri (v1.0):
 |---|---|
 | `proxmox_list_backups` | Bir storage'daki yedekler, en yeniden eskiye; filtreler: `vmid`, `limit` (salt-okunur) |
 | `proxmox_create_backup` | Seçilebilir mod ve sıkıştırma ile yedek oluşturur |
-| `proxmox_restore_backup` | Bir yedek arşivinden VM/CT geri yükler. Mevcut VMID'nin üzerine yazılması `force=true` ve `i_understand_data_loss=true` olmadıkça reddedilir. |
+| `proxmox_restore_backup` | Bir yedek arşivinden VM/CT geri yükler. Mevcut VMID'nin üzerine yazılması `force=true` ve `i_understand_data_loss=true` olmadıkça reddedilir. `dry_run=true` endpoint + payload'ı önizler ve taze bir geri yükleme mi yoksa üzerine-yazma mı olacağını bildirir. |
 
 ### Storage (salt-okunur)
 
@@ -110,7 +117,7 @@ bölümündeki SSH ayarlarını gerektirir.
 | Araç | Açıklama |
 |---|---|
 | `proxmox_move_disk` | Bir VM diskini başka bir storage'a taşır |
-| `proxmox_clone_vm` | Bir VM/CT'yi yeni bir VMID'ye klonlar |
+| `proxmox_clone_vm` | Bir VM/CT'yi yeni bir VMID'ye klonlar. `dry_run=true` klonlamadan payload'ı önizler. |
 | `proxmox_list_isos` | Storage'lardaki mevcut ISO imajlarını listeler (salt-okunur) |
 | `proxmox_zfs_pool_status` | Bir pool için `zpool status`: sağlık, hatalar, scrub durumu (salt-okunur) |
 | `proxmox_zfs_scrub` | Bir ZFS pool'da scrub başlatır |
@@ -130,6 +137,12 @@ bölümündeki SSH ayarlarını gerektirir.
 |---|---|
 | `proxmox_host_exec` | Proxmox host'ta SSH üzerinden serbest shell komutu çalıştırır. `confirm=true` gerektirir; yıkıcı pattern'lere uyan komutlar ayrıca `i_understand_data_loss=true` ister. Her çağrı `_host_ssh_audit.log`'a yazılır. |
 | `proxmox_host_read_exec` | Proxmox host'ta tek bir **salt-okuma**, allowlist'li komut çalıştırır. Geniş tanılama kapsamı: dosya/metin (`cat`, `tail`, `grep`, `zcat`, …), depolama (`lsblk`, `pvs`/`lvs`/`vgs`, `zpool status`, `zfs list`, `zdb`, `smartctl`, `nvme <read>`, `proxmox-boot-tool status`), donanım (`lspci`, `lsusb`, `lshw`, `dmidecode`, `dmesg`), süreç/ağ (`ps`, `ss`, `lsof`, `ip`), servisler (`systemctl status/…`, `journalctl`, `coredumpctl list/info`), Proxmox (`pveversion`, `pct`/`qm config`, `pvesm`, `pvesh get`), paketler (`dpkg-query`, `apt list`, `apt-cache`). `confirm` gerekmez — shell metakarakterlerini, allowlist-dışı binary'leri, mutasyon alt-komutlarını ve yazma/durum/askı bayraklarını (`dmesg -C`, `dmidecode --dump-bin`, `tail -f`, …) reddeder. Salt-okuma ajanlara güvenle verilebilir. |
+
+### Audit-log bütünlüğü
+
+| Araç | Açıklama |
+|---|---|
+| `proxmox_audit_verify` | SSH audit loglarının tamper-evident hash zincirini doğrular (`which='host' \| 'vm' \| 'all'`). Her host/guest shell exec'i hash-zincirli bir satır olarak eklenir (SHA-256, veya `PROXMOX_AUDIT_HMAC_KEY` ayarlıysa HMAC-SHA256); bu araç zinciri yeniden hesaplayıp ilk bozuk satırla birlikte INTACT/BROKEN bildirir. Salt-okunur. |
 
 ### LXC exec
 
@@ -158,6 +171,13 @@ vb.) ek olarak `i_understand_data_loss=true` gerektirir. Ajanın iki
 bayrağı da açıkça geçmesi gerekir — pratikte bu, Claude'un bu araçları
 yalnızca kullanıcı eylemi açıkça istediğinde çağırması anlamına gelir.
 Salt-okunur araçlarda böyle bir koruma yoktur.
+
+En yüksek sonuçlu mutasyonlar — `proxmox_create_vm`,
+`proxmox_create_container`, `proxmox_clone_vm` ve `proxmox_restore_backup` —
+ayrıca `dry_run=true` kabul eder; bu, çalıştırmadan yapacakları tam API
+çağrısını (secret'lar maskeli) döndürür. Her host/guest SSH exec'i,
+`proxmox_audit_verify` ile istediğin an doğrulayabileceğin hash-zincirli bir
+audit log'una kaydedilir.
 
 ## Gereksinimler
 
@@ -362,6 +382,12 @@ hem key hem parola ayarlıysa key kullanılır. Guest VM'ler ayrıca
 | `PROXMOX_SSH_PASSWORD` | — | Parola auth (key yoksa yedek) |
 | `PROXMOX_SSH_KNOWN_HOSTS` | — | known_hosts dosyası yolu; `ignore` host-key doğrulamasını atlar (yalnızca güvenilir LAN) |
 | `PROXMOX_SSH_TIMEOUT` | `30` | SSH bağlantı timeout'u (saniye) |
+
+### Audit log (opsiyonel)
+
+| Değişken | Varsayılan | Açıklama |
+|---|---|---|
+| `PROXMOX_AUDIT_HMAC_KEY` | — | Ayarlanırsa SSH audit log'u düz SHA-256 (bütünlük-kanıtı) yerine HMAC-SHA256 ile hash-zincirlenir (tamper-evident). Gizli ve sabit tut — değiştirmek eski satırların doğrulamasını bozar. `proxmox_audit_verify` ile kontrol et. |
 
 ## Güvenlik notları
 

@@ -21,12 +21,16 @@ from proxmox_mcp.tools import (  # noqa: F401
     # Phase 3 (VM disk movement / clone / ISO listing + ZFS get/status/scrub/send)
     vm_disk,
     ssh_zfs_phase3,
+    # Phase 3.5 (guest creation from scratch: VM + LXC)
+    guest_create,
     # Phase 4 (guest VM SSH — full shell exec, audit-logged)
     vm_ssh,
     # Phase 5 (Proxmox host SSH — full shell exec, audit-logged)
     host_ssh,
     # Phase 5.5 (Proxmox host SSH — allow-listed read-only exec)
     host_read,
+    # Phase 5.6 (tamper-evident audit-log verification)
+    audit_verify,
     # Phase 6 (LXC container exec via pct exec — typed wrapper on host SSH)
     lxc_exec,
     ct_ops,

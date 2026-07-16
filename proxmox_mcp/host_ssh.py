@@ -15,7 +15,6 @@ Connection details come from the existing PROXMOX_SSH_* env vars in .env.
 from __future__ import annotations
 
 import datetime as _dt
-import json
 import os
 import re
 from pathlib import Path
@@ -26,7 +25,7 @@ try:
 except ImportError:
     asyncssh = None  # type: ignore
 
-from proxmox_mcp import config
+from proxmox_mcp import audit, config
 
 
 # Same cap as the other SSH modules
@@ -90,23 +89,17 @@ def audit_log(
     stdout_preview: str = "",
     stderr_preview: str = "",
 ) -> None:
-    """Append one line per call, never raises."""
-    try:
-        ts = _dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        entry = {
-            "ts": ts,
-            "host": config.PROXMOX_SSH_HOST,
-            "user": config.PROXMOX_SSH_USER,
-            "rc": rc,
-            "cmd": cmd[:500],
-            "note": note,
-            "stdout_preview": stdout_preview[:200],
-            "stderr_preview": stderr_preview[:200],
-        }
-        with _AUDIT_PATH.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
-    except Exception:
-        pass  # never let logging break a real call
+    """Append one hash-chained line per call, never raises."""
+    audit.append(_AUDIT_PATH, {
+        "ts": _dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "host": config.PROXMOX_SSH_HOST,
+        "user": config.PROXMOX_SSH_USER,
+        "rc": rc,
+        "cmd": cmd[:500],
+        "note": note,
+        "stdout_preview": stdout_preview[:200],
+        "stderr_preview": stderr_preview[:200],
+    })
 
 
 async def _connect():
