@@ -1,5 +1,5 @@
 [project]
-name = "proxmox-mcp"
+name = "pve-mcp"
 version = "1.2.0"
 description = "Token-efficient MCP server for Proxmox VE (guests, snapshots, backups, storage, LVM/ZFS, guest/host exec, dry-run + tamper-evident audit)"
 readme = "README.md"
@@ -22,7 +22,7 @@ Homepage = "https://github.com/ahmetem/homelab-proxmox-mcp"
 Repository = "https://github.com/ahmetem/homelab-proxmox-mcp"
 
 [project.scripts]
-proxmox-mcp = "proxmox_mcp.server:main"
+pve-mcp = "proxmox_mcp.server:main"
 
 [build-system]
 requires = ["setuptools>=68", "wheel"]
