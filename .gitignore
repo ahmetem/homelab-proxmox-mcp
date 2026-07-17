@@ -46,6 +46,9 @@ ENV/
 env/
 .python-version
 
+# uv (transient lockfile from `uv run`; this repo builds with setuptools)
+uv.lock
+
 # IDE
 .vscode/
 .idea/

@@ -141,7 +141,7 @@ token can't perform. They need the SSH configuration described in the
 
 | Tool | Description |
 |---|---|
-| `proxmox_audit_verify` | Verify the tamper-evident hash chain of the SSH audit logs (`which='host' \| 'vm' \| 'all'`). Every host/guest shell exec is appended as a hash-chained line (SHA-256, or HMAC-SHA256 when `PROXMOX_AUDIT_HMAC_KEY` is set); this recomputes the chain and reports INTACT/BROKEN with the first offending line. Read-only. |
+| `proxmox_audit_verify` | Verify the tamper-evident hash chain of the SSH audit logs (`which='host' \| 'vm' \| 'all'`). Every host/guest shell exec is appended as a hash-chained line (SHA-256, or HMAC-SHA256 when `PROXMOX_AUDIT_HMAC_KEY` is set); this recomputes the chain and reports INTACT/BROKEN with the first offending line. Set `tail=N` to also replay the most recent N recorded entries for review. Read-only. |
 
 ### LXC exec
 
@@ -163,19 +163,55 @@ token can't perform. They need the SSH configuration described in the
 
 ### Built-in safety
 
-All destructive or state-changing actions require `confirm=true`. Tools
-that destroy persistent data (snapshot delete, backup restore with
-overwrite, disk wipe, LVM/ZFS pool/dataset destroy, bulk snapshot
-destroy, etc.) additionally require `i_understand_data_loss=true`. The
-agent must explicitly pass both flags, which in practice means Claude
-only fires these after the user clearly asks for the action. Read-only
-tools have no such guard.
+Every tool falls into one of three safety classes, enforced by the input
+model itself — not just documented:
 
-The highest-consequence mutations — `proxmox_create_vm`,
+| Class | Gate | Examples |
+|---|---|---|
+| **Read-only** | none — runs freely | `proxmox_health_overview`, all `list_*`/`get_*`, `proxmox_audit_verify`, `proxmox_host_read_exec` |
+| **Mutating** | `confirm=true` | `proxmox_vm_power`, `proxmox_create_vm`, `proxmox_create_container`, `proxmox_snapshot` (create/rollback), `proxmox_host_exec` |
+| **Data-destroying** | `confirm=true` **and** `i_understand_data_loss=true` | `proxmox_snapshot` (delete), `proxmox_restore_backup` (overwrite), disk wipe, LVM/ZFS pool/dataset destroy, bulk snapshot destroy |
+
+The gates are Pydantic fields defaulting to `false`, and every input model uses
+`extra="forbid"` — so a forgotten flag, a typo (`confirmed=true`), or a
+malformed value (`confirm="maybe"`) is **rejected**, never silently treated as
+consent. `tests/test_safety_gates.py` proves a refused mutation issues no HTTP
+write call.
+
+**Read-only first.** The read-only set (start with `proxmox_health_overview`)
+carries no gate, so an agent can inspect a node freely; nothing changes state
+until an explicit `confirm=true` call.
+
+**dry-run previews.** The highest-consequence mutations — `proxmox_create_vm`,
 `proxmox_create_container`, `proxmox_clone_vm` and `proxmox_restore_backup` —
 also accept `dry_run=true`, which returns the exact API call they would make
-(secrets masked) without executing it. Every host/guest SSH exec is recorded
-in a hash-chained audit log you can check any time with `proxmox_audit_verify`.
+(secrets masked) without executing it.
+
+**Tamper-evident audit.** Every host/guest SSH exec is appended to a
+hash-chained log (SHA-256, or HMAC-SHA256 with `PROXMOX_AUDIT_HMAC_KEY`).
+`proxmox_audit_verify` recomputes the chain (INTACT/BROKEN) and, with `tail=N`,
+replays the most recent entries.
+
+**Safety in action** — a destructive request is refused, previewed, then
+applied only after explicit consent, and stays on the audit trail:
+
+```text
+# 1. Restore over an existing guest, force+confirm but no ack -> refused, no write
+restore_backup(vmid=101, archive=…, force=true, confirm=true)
+  -> Refused: requires i_understand_data_loss=true      (no HTTP write made)
+
+# 2. Preview first -> see the exact call, nothing changes
+restore_backup(vmid=101, archive=…, dry_run=true)
+  -> DRY RUN — POST /nodes/pve/qemu …  Effect: OVERWRITE existing guest.
+
+# 3. Apply only after the user explicitly accepts the data loss
+restore_backup(vmid=101, archive=…, force=true, confirm=true,
+               i_understand_data_loss=true)
+  -> OK: restore started …
+
+# 4. The exec trail stays verifiable
+audit_verify(tail=5)  -> 🟢 host: INTACT — 128 chained … + last 5 entries
+```
 
 ## Requirements
 

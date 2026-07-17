@@ -5,6 +5,24 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0] - 2026-07-17
+
+### Added
+- **Audit replay** — `proxmox_audit_verify` gains a `tail=N` parameter that
+  lists the most recent N recorded audit entries alongside the INTACT/BROKEN
+  chain verdict (backed by a new read-only `audit.read_entries()`). Verifying
+  the SSH exec trail and reviewing what ran is now a single call.
+- **`tests/test_safety_gates.py`** — bypass/fuzz tests proving the safety gates
+  cannot be circumvented: `extra="forbid"` rejects a typo'd gate field
+  (`confirmed=true`) and malformed values (`confirm="maybe"`, `confirm=2`,
+  `i_understand_data_loss="yep"`); and a refused mutation (missing `confirm`,
+  missing `i_understand_data_loss` on an overwrite restore, or `dry_run`) makes
+  **no** HTTP write call (verified with a POST spy). Suite is now 54 tests.
+
+### Changed
+- `proxmox_audit_verify` title and description updated for the verify **+
+  replay** capability; it stays read-only.
+
 ## [1.2.0] - 2026-07-17
 
 ### Added

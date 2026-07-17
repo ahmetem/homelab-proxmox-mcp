@@ -79,6 +79,33 @@ def append(path: Path, entry: dict) -> None:
         pass  # never let logging break a real call
 
 
+def read_entries(path: Path, limit: int = 20) -> list[dict]:
+    """Return up to the last `limit` parsed entries, oldest-to-newest.
+
+    Read-only, never raises. Blank/unparseable lines are skipped; legacy lines
+    (no `hash`) are included. `limit<=0` returns every entry. Used by the audit
+    replay path in proxmox_audit_verify — it does not verify the chain (that is
+    verify_chain's job), it just surfaces what was recorded."""
+    out: list[dict] = []
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            for raw in f:
+                line = raw.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(obj, dict):
+                    out.append(obj)
+    except FileNotFoundError:
+        return []
+    except Exception:
+        return []
+    return out[-limit:] if limit and limit > 0 else out
+
+
 def verify_chain(path: Path) -> dict:
     """Verify the hash chain in `path`. Returns a summary; never raises.
 
