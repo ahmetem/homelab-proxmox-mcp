@@ -5,6 +5,20 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.1] - 2026-07-29
+
+### Fixed
+- **Pin `mcp` to `<2.0`.** mcp 2.x removed `mcp.server.fastmcp` (FastMCP moved
+  out of the SDK), and this server opens with
+  `from mcp.server.fastmcp import FastMCP`. The dependency was declared
+  `mcp>=1.2.0` with no upper bound, and homelab-agent's autodeploy refreshes a
+  server's venv (`pip install -r` / `-e .`) whenever its manifest changes — so
+  on 2026-07-29 a routine rebuild pulled 2.0.0 and **every MCP server on CT 207
+  failed to start** with `ModuleNotFoundError`. The agent's whole tool layer was
+  dark for ~45 minutes while its dashboard still showed green. No code change is
+  needed to run on mcp 1.x; the pin just stops an unattended rebuild from
+  crossing the 2.x boundary.
+
 ## [1.3.0] - 2026-07-17
 
 ### Added
