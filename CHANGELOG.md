@@ -5,6 +5,26 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.0] - 2026-07-29
+
+### Added
+- **Read-only look INSIDE a container**: `proxmox_host_read_exec` now accepts
+  `pct exec <vmid> -- <read-only command>`. Until now there was no read-only way
+  to see a container from the inside at all — `proxmox_host_read_exec` covered
+  only the host, and `proxmox_lxc_exec` is classified S5 (forbidden) in the
+  homelab-agent safety model, so an agent diagnosing "what does this service see
+  from inside the CT?" had no legal tool and kept attempting the forbidden one.
+- No new tool and no new safety classification: the part after `--` is
+  **re-validated by the same `validate_read_command`**, so the container gets
+  exactly the host allow-list. `pct exec 200 -- systemctl status postgresql`
+  passes; `-- rm -rf /`, `-- systemctl restart`, `-- dmesg --clear`,
+  `-- tail -f`, `-- bash -c ...` are all refused, as is a missing/non-numeric
+  vmid, a missing `--`, an empty inner command, and nested `pct exec`. Rejections
+  are prefixed `Refused (inside CT <vmid>):` so the cause is unambiguous. The
+  shell-metacharacter gate runs before parsing, so it covers the inner command
+  too, and `host_ssh.is_destructive` still sees the whole string.
+- `tests/test_host_read.py`: four new test groups covering the above (15/15 pass).
+
 ## [1.3.1] - 2026-07-29
 
 ### Fixed

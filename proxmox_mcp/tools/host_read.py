@@ -19,6 +19,10 @@ Safety model (defense in depth — all must pass):
      `--vacuum*` for journalctl, `-t`/`--test` for smartctl).
   4. As a final backstop the command is also run through the shared
      `host_ssh.is_destructive` detector and refused on any match.
+  5. `pct exec <vmid> -- <cmd>` is the ONE way to read inside a container.
+     The part after `--` is re-validated by this same function, so the
+     container gets exactly the host allow-list -- it is not a bypass.
+     One level only (no nested `pct exec`).
 
 No confirm / data-loss ack is needed — the command cannot mutate. Every call is
 still recorded in the same host audit log.
@@ -77,7 +81,10 @@ _READ_ALLOW: dict[str, Optional[set[str]]] = {
                   "list-units", "list-timers", "list-unit-files", "cat",
                   "list-jobs", "list-dependencies", "list-sockets",
                   "get-default"},
-    "pct": {"config", "list", "status", "listsnapshot", "df", "pending"},
+    # "exec" is accepted ONLY in the `pct exec <vmid> -- <cmd>` form, and the
+    # inner command is re-validated against this very allow-list (see
+    # _validate_pct_exec). Without that recursion this entry would be a hole.
+    "pct": {"config", "list", "status", "listsnapshot", "df", "pending", "exec"},
     "qm": {"config", "list", "status", "listsnapshot", "pending", "showcmd"},
     "pvesm": {"status", "list", "path", "apiinfo"},
     "ip": {"addr", "link", "route", "neigh", "a", "l", "r", "n", "-s"},
@@ -109,9 +116,46 @@ _DENIED_FLAGS: dict[str, set[str]] = {
 }
 
 
-def validate_read_command(command: str) -> Optional[str]:
+# `pct exec` runs a command INSIDE a container. There was no read-only way to
+# look inside a CT at all (proxmox_host_read_exec only covers the host, and
+# proxmox_lxc_exec is S5 in the agent's safety model), so diagnosing "what does
+# this service see from inside" was impossible without a forbidden tool. The
+# opening is deliberately narrow: the inner command is re-validated by this same
+# function, so exactly the host allow-list applies inside the container too.
+# Nesting is pointless and confusing, so one level only.
+_PCT_EXEC_MAX_DEPTH = 1
+
+
+def _validate_pct_exec(argv: list[str], depth: int) -> Optional[str]:
+    """Validate `pct exec <vmid> -- <read-only command>`. Returns None if the
+    inner command is allow-listed, else the rejection reason."""
+    if depth >= _PCT_EXEC_MAX_DEPTH:
+        return "Refused: nested 'pct exec' is not allowed."
+    if "--" not in argv:
+        return (
+            "Refused: 'pct exec' must be written "
+            "`pct exec <vmid> -- <read-only command>`. The '--' separator is "
+            "required so the inner command can be validated on its own."
+        )
+    cut = argv.index("--")
+    head, inner = argv[:cut], argv[cut + 1:]
+    vmid = next((a for a in head[2:] if not a.startswith("-")), None)
+    if vmid is None or not vmid.isdigit():
+        return "Refused: 'pct exec' needs a numeric <vmid> before '--'."
+    if not inner:
+        return "Refused: 'pct exec' has no command after '--'."
+    err = validate_read_command(shlex.join(inner), _depth=depth + 1)
+    if err:
+        # Make it obvious the rejection is about the INNER command.
+        return err.replace("Refused:", "Refused (inside CT %s):" % vmid, 1)
+    return None
+
+
+def validate_read_command(command: str, _depth: int = 0) -> Optional[str]:
     """Return None if `command` is a safe read-only host command, else an error
-    string explaining the rejection. Pure function — unit-testable."""
+    string explaining the rejection. Pure function — unit-testable.
+
+    `_depth` is internal: it bounds the `pct exec` recursion."""
     bad = _FORBIDDEN_CHARS.intersection(command)
     if bad:
         shown = " ".join(sorted(bad)).replace("\n", "\\n").replace("\r", "\\r")
@@ -144,6 +188,12 @@ def validate_read_command(command: str) -> Optional[str]:
                 f"subcommand. Allowed for {binary}: "
                 + ", ".join(sorted(allowed_subs)) + "."
             )
+        if binary == "pct" and sub == "exec":
+            err = _validate_pct_exec(argv, _depth)
+            if err:
+                return err
+            # Fall through: the shared backstops below (denied flags, and above
+            # all host_ssh.is_destructive on the WHOLE command string) still run.
 
     if binary in _FOLLOW_HANGS and (
         "-f" in argv or "--follow" in argv
@@ -182,7 +232,9 @@ class HostReadInput(BaseModel):
             "A single READ-ONLY command to run on the Proxmox host. Allow-listed "
             "binaries only (cat, head, tail, ls, stat, du, df, journalctl, "
             "zpool status/list, zfs list/get, systemctl status/show, pct/qm "
-            "config/list/status, smartctl, …). No pipes, redirects, chaining, or "
+            "config/list/status, smartctl, …). To read INSIDE a container use "
+            "`pct exec <vmid> -- <read-only command>`; the inner command must "
+            "itself be allow-listed. No pipes, redirects, chaining, or "
             "substitution — for those use proxmox_host_exec. Globs and quotes are "
             "allowed."
         ),

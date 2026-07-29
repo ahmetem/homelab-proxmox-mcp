@@ -168,6 +168,38 @@ def test_rejects_empty():
     _no("   ")
 
 
+def test_pct_exec_allows_readonly_inside_container():
+    """`pct exec <vmid> -- <cmd>` is the only read-only way to look INSIDE a CT.
+    The inner command is re-validated against the same allow-list."""
+    _ok("pct exec 200 -- systemctl status postgresql")
+    _ok("pct exec 209 -- journalctl -n 50 -u homelab-agent-ha")
+    _ok("pct exec 201 -- df -h")
+    _ok("pct exec 204 -- cat /etc/hosts")
+
+
+def test_pct_exec_refuses_mutating_inner_command():
+    """The whole point: the container is not a way around the allow-list."""
+    _no("pct exec 200 -- rm -rf /")
+    _no("pct exec 200 -- systemctl restart postgresql")
+    _no("pct exec 200 -- dmesg --clear")
+    _no("pct exec 200 -- tail -f /var/log/syslog")
+    _no("pct exec 200 -- bash -c 'id'")
+
+
+def test_pct_exec_requires_wellformed_invocation():
+    _no("pct exec 200 systemctl status postgresql")   # no '--' separator
+    _no("pct exec -- df -h")                          # no vmid
+    _no("pct exec abc -- df -h")                      # vmid not numeric
+    _no("pct exec 200 --")                            # nothing after '--'
+    _no("pct exec 200 -- pct exec 201 -- df -h")      # nesting
+
+
+def test_pct_exec_still_blocks_shell_metacharacters():
+    """The char gate runs before parsing, so it covers the inner command too."""
+    _no("pct exec 200 -- cat /etc/shadow; id")
+    _no("pct exec 200 -- sh -c \"cat /etc/passwd | wc -l\"")
+
+
 def _run_standalone():
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     failed = 0
