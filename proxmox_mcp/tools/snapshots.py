@@ -8,6 +8,7 @@ from proxmox_mcp.config import require_config
 from proxmox_mcp.format import compact_json, missing_confirm, missing_data_loss_ack
 from proxmox_mcp.mcp_instance import mcp
 from proxmox_mcp.models import ResponseFormat, SnapshotManageInput, VMInput
+from proxmox_mcp.operator_ack import ack_refusal, gated
 
 
 @mcp.tool(
@@ -64,10 +65,15 @@ async def proxmox_list_snapshots(params: VMInput) -> str:
         "openWorldHint": True,
     },
 )
-async def proxmox_snapshot(params: SnapshotManageInput) -> str:
+@gated(
+    "proxmox_snapshot",
+    "rollback discards state newer than the snapshot; delete is permanent",
+)
+async def proxmox_snapshot(params: SnapshotManageInput, operator_ack=None) -> str:
     """Manage a VM/CT snapshot: action='create', 'rollback', or 'delete'.
 
-    Gates: all actions require confirm=true. 'rollback' discards state newer
+    Gates: all actions require confirm=true, and where the client supports it the
+    operator is asked to approve directly. 'rollback' discards state newer
     than the snapshot. 'delete' also requires i_understand_data_loss=true —
     the snapshot and its unique data are removed permanently (current state
     is unaffected). Set wait_seconds>0 to get the task result inline.
@@ -77,6 +83,13 @@ async def proxmox_snapshot(params: SnapshotManageInput) -> str:
         return cfg
     if not params.confirm:
         return missing_confirm(f"proxmox_snapshot (action={params.action})")
+    # Every model-set flag is checked before the operator is asked, so a human is
+    # never prompted for a call that a later flag gate would refuse anyway.
+    if params.action == "delete" and not params.i_understand_data_loss:
+        return missing_data_loss_ack("proxmox_snapshot (action=delete)")
+    refused = ack_refusal(operator_ack, f"proxmox_snapshot (action={params.action})")
+    if refused:
+        return refused
 
     base = f"/nodes/{params.node}/{params.vm_type}/{params.vmid}/snapshot"
     try:
@@ -89,9 +102,7 @@ async def proxmox_snapshot(params: SnapshotManageInput) -> str:
         elif params.action == "rollback":
             task_id = await http_client.post(f"{base}/{params.snapname}/rollback")
             verb = "rollback"
-        else:  # delete
-            if not params.i_understand_data_loss:
-                return missing_data_loss_ack("proxmox_snapshot (action=delete)")
+        else:  # delete (data-loss ack already checked above)
             query = {"force": 1} if params.force else None
             task_id = await http_client.delete(
                 f"{base}/{params.snapname}", params=query

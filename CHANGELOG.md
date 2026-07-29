@@ -5,6 +5,51 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.0] - 2026-07-30
+
+### Added
+- **Operator approval for destructive tools** (`proxmox_mcp/operator_ack.py`).
+  `confirm=true` is a tool argument, so it only ever proved the *model's* intent;
+  nothing forced the question to reach a human. On mcp >= 2.0 the same decision
+  is now put to the operator through the client, using the resolver injection of
+  spec revision 2026-07-28 (`Annotated[..., Resolve(...)]` + `Elicit`). The
+  approval lands in a server-filled parameter that **never appears in the
+  model-facing input schema** (verified: `properties: ['params']` on both SDK
+  eras), so it cannot be supplied or forged by a tool call.
+  - Wired into `proxmox_snapshot` as the reference implementation. Observed
+    end-to-end: operator approves -> the API call runs; operator declines -> the
+    call is refused and **no HTTP write is made**, even with `confirm=true` and
+    `i_understand_data_loss=true` both set by the model.
+  - Degrades to the flag gate alone — today's behaviour — on mcp 1.x or when the
+    client declares no form elicitation. This is deliberate: the SDK's own path
+    raises `MISSING_REQUIRED_CLIENT_CAPABILITY` there, which would have made
+    every destructive tool unusable on a client without human-in-the-loop.
+  - The question is only asked once every model-set flag already passes, so the
+    operator is never prompted for a call a later gate would refuse anyway. The
+    `delete` data-loss check moved earlier in `proxmox_snapshot` for that reason
+    (same message, still before any HTTP call).
+  - `tests/test_operator_ack.py`: 10 tests — schema invisibility (both eras),
+    when the resolver asks vs stays silent, every negative verdict, and
+    approve/decline through the tool body against an HTTP spy.
+
+### Changed
+- **mcp SDK 2.x support** (spec revision 2026-07-28). `mcp_instance.py` imports
+  `MCPServer` and falls back to `FastMCP` on the 1.x maintenance line; it is the
+  only module that touches the SDK's server class. All 52 tools register
+  unchanged — the decorator API did not move.
+  - Verified over real stdio (the exact command Claude Desktop runs):
+    `protocol_version=2026-07-28`, 52 tools, live read-only API call OK, both
+    flag gates intact.
+- **Dependency floor raised to `mcp>=2.0,<3`.** CT 207's autodeploy runs
+  `pip install -e .` without `-U`, so any range that mcp 1.29.0 already satisfied
+  would have left the deployed venv on the 1.x line forever. Sized as a minor
+  (not major) release: the server code itself still runs on 1.x via the fallback,
+  which is also what keeps it alive if that pip step ever fails.
+- `serverInfo.version` is still left empty on purpose: the only single source is
+  `pyproject.toml`, and reading it back from the installed dist reports a stale
+  number when the server runs from a source checkout (`pve-mcp 1.3.0` installed
+  against a 1.4.0 tree — exactly this trap).
+
 ## [1.4.0] - 2026-07-29
 
 ### Added

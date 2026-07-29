@@ -178,6 +178,19 @@ malformed value (`confirm="maybe"`) is **rejected**, never silently treated as
 consent. `tests/test_safety_gates.py` proves a refused mutation issues no HTTP
 write call.
 
+**Operator approval (mcp ≥ 2.0).** `confirm=true` is a tool *argument*, so it
+proves the model's intent and nothing about the operator's — no part of the
+protocol forces the question to reach a human. Where the client offers form
+elicitation, `proxmox_snapshot` also asks the operator directly, using the
+resolver injection added in MCP spec revision 2026-07-28: the approval arrives
+in a parameter filled by the server, never appears in the model-facing input
+schema, and therefore cannot be supplied — or forged — by a tool call. A
+declined prompt refuses the call and issues no write, even when the model set
+every flag. The question is raised only once the flag gates already pass, so a
+missing flag is still refused on the spot without bothering the operator; and on
+an SDK or client without elicitation the flags remain the whole gate, exactly as
+before.
+
 **Read-only first.** The read-only set (start with `proxmox_health_overview`)
 carries no gate, so an agent can inspect a node freely; nothing changes state
 until an explicit `confirm=true` call.

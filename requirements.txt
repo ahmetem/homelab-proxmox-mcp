@@ -1,7 +1,13 @@
-# Pinned <2.0: mcp 2.x removed mcp.server.fastmcp (FastMCP moved out of the
-# SDK). An unpinned rebuild pulled 2.0.0 on 2026-07-29 and every MCP server
-# on CT 207 failed to start -- the agent's whole tool layer went dark.
-mcp>=1.2.0,<2.0
+# Floor is 2.x on purpose: CT 207's autodeploy runs `pip install -e .` without
+# -U, so any range that 1.29.0 already satisfies would leave the deployed venv
+# on the 1.x maintenance line forever. mcp_instance.py still falls back to
+# FastMCP, which is what keeps the server running if that pip step ever fails
+# and the venv is left on 1.x with new code.
+#
+# The old <2.0 pin was the stop-gap after an unpinned rebuild pulled 2.0.0 on
+# 2026-07-29 and every MCP server on CT 207 failed to start -- the cause was
+# exactly the FastMCP -> MCPServer rename the fallback now absorbs.
+mcp>=2.0,<3
 httpx>=0.27.0
 pydantic>=2.6.0
 python-dotenv>=1.0.0
