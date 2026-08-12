@@ -20,9 +20,13 @@
 ## Nereye bakılır
 - Araçlar `proxmox_mcp/tools/` altında konu bazlı bölünmüş
 - Ortak kapılar: `proxmox_mcp/format.py` → `missing_confirm()`,
-  `proxmox_mcp/config.py` → `require_config()`
+  `proxmox_mcp/config.py` → `require_config()`,
+  `proxmox_mcp/operator_ack.py` → `@gated(...)` + `ack_refusal(...)`
 - **Araç envanterini `tools/` dizininden oku** — sayıyı buraya yazmıyorum, bayatlar
   (README'deki sayı da geride kalabiliyor)
+- **`proxmox_mcp/mcp_instance.py` SDK'nın server sınıfına dokunan TEK modüldür**
+  (spec revizyonu 2026-07-28): `MCPServer` importu `ImportError`'da 1.x'in `FastMCP`'sine
+  düşer. Başka modüle `mcp.server.*` importu ekleme — 1.x'te sessizce kırılır.
 
 ## Veri ve bağımlılıklar
 - **Zorunlu env:** `PROXMOX_HOST`, `PROXMOX_USER`, `PROXMOX_TOKEN_NAME`,
@@ -30,8 +34,16 @@
 - API **token** ile bağlanır, parola ile değil
 
 ## Bu projeye özgü kısıtlar
-- **Yıkıcı araçlar `confirm=true` ister.** Bu kasıtlı bir güvenlik kapısı; kaldırılmaz,
-  varsayılanı `true` yapılmaz. Yeni yıkıcı araç eklerken `missing_confirm()` desenini uygula.
+- **Yıkıcı araçlarda kapı İKİ KATMANLI (v1.5.0) — karıştırma:**
+  (a) `confirm=true` bir **tool argümanıdır**, yani modelin niyetini kanıtlar,
+  operatörünkini değil; kaldırılmaz, varsayılanı `true` yapılmaz.
+  (b) `operator_ack` **insan** yarısıdır: resolver injection ile gelir, model-facing
+  şemada görünmez, dolayısıyla tool çağrısıyla uydurulamaz. `mcp<2.0`'da ya da form
+  elicitation sunmayan istemcide **`confirm`-only davranışına düşer** (araçlar
+  kaybolmaz). Soru yalnız `confirm=true` zaten verilmişken sorulur — eksik bayrak
+  operatörü rahatsız etmeden yerinde reddedilir.
+  Yeni yıkıcı araç eklerken üçünü birden uygula: `missing_confirm()` deseni,
+  `@mcp.tool(...)` **altına** `@gated(...)`, ve gövdede `ack_refusal(...)`.
 - Bu sunucu **gerçek homelab'i** yönetir; sahte ortam yok. Yeni araç geliştirirken önce
   salt-okunur muadilini doğrula, yıkıcı yolu en son ve tek guest üzerinde dene.
 
