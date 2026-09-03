@@ -5,6 +5,25 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.1] - 2026-09-03
+
+### Fixed
+- **`proxmox_mcp.__version__` reported 1.3.0 while the package shipped 1.5.0.**
+  The literal is public API (it is exported in `__all__`), so every client that
+  imported it was told the wrong version for five weeks (2026-07-30 - 09-03).
+  Synced to the packaged version and pinned by `tests/test_version.py`, which
+  fails the build if `__init__.py`, `pyproject.toml` and `CHANGELOG.md` ever
+  disagree again. Reading the number from installed package metadata was tried
+  and rejected: an editable install keeps the version recorded at install time,
+  so it goes stale just as silently (measured - the local venv still reported
+  1.3.0 after the source said 1.5.0).
+- **`.gitignore` did not cover `.env` variants.** `.env.bak-wan-20260902` and
+  `.env.lanmode-20260902` (left over from the 2026-09-02 LAN-mode switch) were
+  untracked but **not ignored**, so a `git add -A` would have committed live
+  Proxmox API tokens. `.env.*` is now ignored with `!.env.example` kept tracked;
+  the leftover files were deleted (the `.bak-wan` copies were byte-identical to
+  the current `.env`).
+
 ## [1.5.0] - 2026-07-30
 
 ### Added

@@ -2,6 +2,11 @@
 .env
 .env.local
 *.env
+# .env.bak-* / .env.lanmode-* gibi varyantlar da: 2026-09-02'de LAN moduna
+# gecerken uretilenler untracked ama IGNORE DEGILDI (yanlislikla commit
+# edilebilirlerdi).
+.env.*
+!.env.example  # sablon; sir icermez, izlenir
 
 # Local config with hostnames/users (sensitive but not secret)
 vm_ssh_hosts.json
