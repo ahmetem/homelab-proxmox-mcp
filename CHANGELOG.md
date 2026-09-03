@@ -5,6 +5,17 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.2] - 2026-09-03
+
+### Fixed
+- **The `!.env.example` exception added in 1.5.1 never applied.** It carried a
+  trailing `# comment`, and in `.gitignore` a `#` is only a comment at the start
+  of a line -- elsewhere it is part of the pattern, so the negation matched
+  nothing and `.env.*` swallowed the template too. Measured in a scratch repo,
+  not assumed: `git check-ignore --no-index .env.example` now resolves to the
+  `!.env.example` rule. (`.env.example` stayed committable throughout because it
+  is already tracked; the bug would have bitten on a fresh clone or re-add.)
+
 ## [1.5.1] - 2026-09-03
 
 ### Fixed

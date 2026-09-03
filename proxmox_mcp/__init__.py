@@ -7,5 +7,5 @@ from proxmox_mcp.server import mcp, main
 # package shipped 1.5.0; caught 2026-09-03.) Reading the version from installed
 # package metadata instead was tried and rejected: an editable install keeps the
 # version recorded at install time, so it reports a stale number just as silently.
-__version__ = "1.5.1"
+__version__ = "1.5.2"
 __all__ = ["mcp", "main", "__version__"]

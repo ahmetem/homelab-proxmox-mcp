@@ -6,7 +6,8 @@
 # gecerken uretilenler untracked ama IGNORE DEGILDI (yanlislikla commit
 # edilebilirlerdi).
 .env.*
-!.env.example  # sablon; sir icermez, izlenir
+# .env.example sablondur, sir icermez ve izlenir:
+!.env.example
 
 # Local config with hostnames/users (sensitive but not secret)
 vm_ssh_hosts.json
