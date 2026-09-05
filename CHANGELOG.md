@@ -87,7 +87,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `pct exec <vmid> -- <read-only command>`. Until now there was no read-only way
   to see a container from the inside at all — `proxmox_host_read_exec` covered
   only the host, and `proxmox_lxc_exec` is classified S5 (forbidden) in the
-  homelab-agent safety model, so an agent diagnosing "what does this service see
+  homelab-agent-sys safety model, so an agent diagnosing "what does this service see
   from inside the CT?" had no legal tool and kept attempting the forbidden one.
 - No new tool and no new safety classification: the part after `--` is
   **re-validated by the same `validate_read_command`**, so the container gets
@@ -106,7 +106,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Pin `mcp` to `<2.0`.** mcp 2.x removed `mcp.server.fastmcp` (FastMCP moved
   out of the SDK), and this server opens with
   `from mcp.server.fastmcp import FastMCP`. The dependency was declared
-  `mcp>=1.2.0` with no upper bound, and homelab-agent's autodeploy refreshes a
+  `mcp>=1.2.0` with no upper bound, and homelab-agent-sys's autodeploy refreshes a
   server's venv (`pip install -r` / `-e .`) whenever its manifest changes — so
   on 2026-07-29 a routine rebuild pulled 2.0.0 and **every MCP server on CT 207
   failed to start** with `ModuleNotFoundError`. The agent's whole tool layer was
