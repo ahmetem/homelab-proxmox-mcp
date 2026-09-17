@@ -5,6 +5,16 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.3] - 2026-09-17
+
+### Added
+- **`pyrightconfig.json`** so the Pyright language server finds this repo's
+  `.venv`. Without it every third-party import (`dotenv`, `httpx`, ...) resolved
+  to `reportMissingImports`, which polluted editor/agent diagnostics; measured
+  with the Pyright CLI, not assumed: 1 error without the file, 0 with it.
+  `build/` is excluded too -- `findReferences` was returning each symbol twice,
+  once from `proxmox_mcp/` and once from the stale `build/lib/` copy.
+
 ## [1.5.2] - 2026-09-03
 
 ### Fixed
