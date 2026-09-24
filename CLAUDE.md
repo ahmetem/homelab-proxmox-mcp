@@ -26,7 +26,8 @@
   (README'deki sayı da geride kalabiliyor)
 - **`proxmox_mcp/mcp_instance.py` SDK'nın server sınıfına dokunan TEK modüldür**
   (spec revizyonu 2026-07-28): `MCPServer` importu `ImportError`'da 1.x'in `FastMCP`'sine
-  düşer. Başka modüle `mcp.server.*` importu ekleme — 1.x'te sessizce kırılır.
+  düşer. Başka modülde `mcp.server.*` importu gerekiyorsa `operator_ack.py` gibi
+  `try/except ImportError` ile koru ve 1.x yolunu tanımla — korumasız import 1.x'te kırılır.
 
 ## Veri ve bağımlılıklar
 - **Zorunlu env:** `PROXMOX_HOST`, `PROXMOX_USER`, `PROXMOX_TOKEN_NAME`,
@@ -50,4 +51,5 @@
 ## Tuzaklar
 - Değişiklik geçmişi ve bilinen davranış farkları: `CHANGELOG.md`
 - Araç eklendiğinde brain'deki proje notu ve `homelab-project/02-mcp-servers.md` bayatlar;
-  haftalık `brain-repo-reconcile` görevi bunu yakalar.
+  haftalık rutinler yakalar: `02`'deki araç sayısını `haftalik-repo-belge-tazeleme`,
+  brain notunu `brain-repo-reconcile`.
