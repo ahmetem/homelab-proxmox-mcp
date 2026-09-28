@@ -15,6 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `build/` is excluded too -- `findReferences` was returning each symbol twice,
   once from `proxmox_mcp/` and once from the stale `build/lib/` copy.
 
+### Fixed
+- `proxmox_mcp.__version__` still said 1.5.2; aligned with `pyproject.toml` (1.5.3).
+
 ## [1.5.2] - 2026-09-03
 
 ### Fixed
