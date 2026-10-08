@@ -178,6 +178,20 @@ malformed value (`confirm="maybe"`) is **rejected**, never silently treated as
 consent. `tests/test_safety_gates.py` proves a refused mutation issues no HTTP
 write call.
 
+**PVE-registered snapshots are never raw-destroyed (1.6.0).** A snapshot taken
+with `pct/qm snapshot` also has a `[name]` section in the guest config;
+deleting only its ZFS half leaves that section behind, and the next
+`pct/qm delsnapshot` strands the guest in `lock: snapshot-delete` (it then
+won't start). `proxmox_zfs_destroy_snapshots_by_pattern`,
+`proxmox_cleanup_vzdump_snapshots` and `proxmox_host_exec` (when the command
+contains `zfs destroy`) read every guest config first and refuse — no flag
+overrides it — pointing to `pct/qm delsnapshot`. Snapshots PVE doesn't know
+about (sanoid `autosnap_*`, ad-hoc `zfs snapshot`) pass. If `/etc/pve` can't be
+read, they refuse rather than run blind. Limit: `proxmox_host_exec` only sees
+literal `<dataset>@<snap>` text, so names generated at run time
+(`zfs list … | xargs zfs destroy`) slip through — use the pattern tool, which
+checks every match exactly. `tests/test_pve_snapshot_gate.py` covers it.
+
 **Operator approval (mcp ≥ 2.0).** `confirm=true` is a tool *argument*, so it
 proves the model's intent and nothing about the operator's — no part of the
 protocol forces the question to reach a human. Where the client offers form

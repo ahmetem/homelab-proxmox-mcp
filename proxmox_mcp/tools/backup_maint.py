@@ -16,7 +16,7 @@ from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from proxmox_mcp import host_ssh
+from proxmox_mcp import host_ssh, pve_snapshots
 from proxmox_mcp.config import require_ssh
 from proxmox_mcp.format import missing_confirm
 from proxmox_mcp.mcp_instance import mcp
@@ -103,16 +103,31 @@ async def proxmox_cleanup_vzdump_snapshots(params: CleanupVzdumpInput) -> str:
             msg += "\n(%d found but younger than %dm - left alone.)" % (len(too_young), params.min_age_minutes)
         return msg
 
-    listing = "\n".join("  - `%s`" % n for n in candidates)
+    # An orphaned @vzdump can still have a [vzdump] section in the guest config
+    # (LXC snapshot-mode vzdump calls PVE::LXC::Config->snapshot_create($vmid,
+    # 'vzdump')); raw-destroying it would leave the config stale — see pve_snapshots.
+    try:
+        registered = await pve_snapshots.load_registered()
+    except RuntimeError as exc:
+        return "Refused: PVE guest configs could not be checked (%s)." % exc
+    hits = pve_snapshots.registered_hits(
+        [tuple(n.split("@", 1)) for n in candidates], registered)
+    blocked = {"%s@%s" % (ds, snap) for _vmid, ds, snap in hits}
+    skipped = ("registered in PVE config, skipped:\n" + pve_snapshots.refusal(hits)) if hits else ""
+
+    listing = "\n".join("  - `%s`" % n for n in candidates if n not in blocked)
     if params.dry_run:
-        return "## Would remove %d stale @vzdump snapshot(s)\n\n%s\n\nRe-run with dry_run=false, confirm=true to remove." % (len(candidates), listing)
+        msg = "## Would remove %d stale @vzdump snapshot(s)\n\n%s\n\nRe-run with dry_run=false, confirm=true to remove." % (len(candidates) - len(blocked), listing)
+        return msg + ("\n\n" + skipped if skipped else "")
     if not params.confirm:
         return missing_confirm("proxmox_cleanup_vzdump_snapshots")
 
     removed = []
     failed = []
+    if skipped:
+        failed.append(skipped)
     for name in candidates:
-        if not name.endswith(_VZDUMP_SUFFIX):
+        if not name.endswith(_VZDUMP_SUFFIX) or name in blocked:
             continue
         try:
             drc, dout, derr = await host_ssh.exec_command("zfs destroy " + name, timeout=30)

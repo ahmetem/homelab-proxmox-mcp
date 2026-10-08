@@ -179,6 +179,19 @@ ayrıca `dry_run=true` kabul eder; bu, çalıştırmadan yapacakları tam API
 `proxmox_audit_verify` ile istediğin an doğrulayabileceğin hash-zincirli bir
 audit log'una kaydedilir.
 
+**PVE'de kayıtlı snapshot'lar ham ZFS ile silinmez (1.6.0).** `pct/qm snapshot`
+ile alınan snapshot'ın guest config'inde bir de `[ad]` bölümü vardır; yalnız ZFS
+yarısını silmek o bölümü geride bırakır ve sonraki `pct/qm delsnapshot` guest'i
+`lock: snapshot-delete`'te bırakır (guest açılmaz). `proxmox_zfs_destroy_snapshots_by_pattern`,
+`proxmox_cleanup_vzdump_snapshots` ve `proxmox_host_exec` (komutta `zfs destroy`
+varsa) önce tüm guest config'lerini okur ve reddeder — hiçbir bayrak bunu
+aşmaz — ve `pct/qm delsnapshot`'a yönlendirir. PVE'nin bilmediği snapshot'lar
+(sanoid `autosnap_*`, elle `zfs snapshot`) geçer. `/etc/pve` okunamazsa körlemesine
+çalışmak yerine reddeder. Sınır: `proxmox_host_exec` yalnız komut metninde açıkça
+yazan `<dataset>@<snap>`'i görür; çalışma anında üretilen adlar
+(`zfs list … | xargs zfs destroy`) kaçar — bunun için her eşleşmeyi tam
+denetleyen desen aracını kullan. Testler: `tests/test_pve_snapshot_gate.py`.
+
 ## Gereksinimler
 
 - **Python 3.11+**

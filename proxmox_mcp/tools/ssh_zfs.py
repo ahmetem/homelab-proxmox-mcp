@@ -19,7 +19,7 @@ from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from proxmox_mcp import ssh
+from proxmox_mcp import pve_snapshots, ssh
 from proxmox_mcp.config import require_ssh
 from proxmox_mcp.format import (
     compact_json,
@@ -471,6 +471,9 @@ async def proxmox_zfs_destroy_snapshots_by_pattern(
       - max_delete caps a single call's deletions (default 1000)
       - Each snapshot deleted with its own `zfs destroy` — atomicity
         is per-snapshot, not per-batch. Partial completion is logged.
+      - If ANY match is registered in a PVE guest config (`[snapname]`
+        section), the whole batch is refused — those must go through
+        `pct/qm delsnapshot`. The dry run lists them up front.
     """
     cfg_err = require_ssh()
     if cfg_err:
@@ -532,8 +535,23 @@ async def proxmox_zfs_destroy_snapshots_by_pattern(
             ts = creation
         table.append(f"| `{name}` | {ts} | {fmt_bytes(used)} |")
 
+    # PVE-registered snapshots can't be raw-destroyed (see pve_snapshots).
+    refs = [tuple(name.split("@", 1)) for name, _c, _u in matches]
+    try:
+        hits = pve_snapshots.registered_hits(
+            refs, await pve_snapshots.load_registered())
+        check_err = None
+    except RuntimeError as exc:
+        hits, check_err = [], str(exc)
+
     # Dry run: report and stop.
     if params.dry_run:
+        if check_err:
+            note = f"\n\n**Warning:** PVE config check failed ({check_err}); a real run will refuse."
+        elif hits:
+            note = "\n\n**A real run will refuse:**\n" + pve_snapshots.refusal(hits)
+        else:
+            note = ""
         return (
             f"## Dry run: {len(matches)} snapshot(s) match\n\n"
             f"Dataset: `{params.dataset}`"
@@ -543,6 +561,7 @@ async def proxmox_zfs_destroy_snapshots_by_pattern(
             + "\n\n"
             "To actually delete: re-run with dry_run=false, confirm=true, "
             "i_understand_data_loss=true."
+            + note
         )
 
     # Real run: full gate.
@@ -557,6 +576,13 @@ async def proxmox_zfs_destroy_snapshots_by_pattern(
             "max_delete (up to 10000) explicitly. This guard catches "
             "accidentally-too-wide patterns like `*`."
         )
+    if check_err:
+        return (
+            f"Refused: PVE guest configs could not be checked ({check_err}). "
+            "Not destroying snapshots blind."
+        )
+    if hits:
+        return pve_snapshots.refusal(hits)
 
     deleted: list[str] = []
     failed: list[tuple[str, str]] = []  # (name, stderr)

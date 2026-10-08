@@ -18,7 +18,7 @@ from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from proxmox_mcp import host_ssh, config
+from proxmox_mcp import host_ssh, config, pve_snapshots
 from proxmox_mcp.format import missing_confirm
 from proxmox_mcp.mcp_instance import mcp
 
@@ -69,6 +69,11 @@ async def proxmox_host_exec(params: HostExecInput) -> str:
     pattern (rm -rf, mkfs, dd of=/dev/..., zpool destroy, qm destroy,
     shutdown, fork bombs, etc.) also require i_understand_data_loss=true.
 
+    A `zfs destroy` of a snapshot that is registered in a PVE guest config
+    (`[snapname]` section in /etc/pve/{lxc,qemu-server}/<vmid>.conf) is
+    refused outright — no flag overrides it; use `pct/qm delsnapshot`.
+    Sanoid `autosnap_*` and other unregistered snapshots are unaffected.
+
     Every call is recorded in _host_ssh_audit.log next to the package.
 
     Prefer the typed API tools (proxmox_list_disks, proxmox_zfs_*,
@@ -85,6 +90,31 @@ async def proxmox_host_exec(params: HostExecInput) -> str:
             f"Refused: command matches destructive pattern {danger!r}. "
             "Re-run with i_understand_data_loss=true if this is intentional."
         )
+
+    # kisayol: literal `<ds>@<snap>` tokens only. Names produced at run time
+    # (`zfs list ... | grep pre_ | xargs zfs destroy`, `$(...)`, read loops)
+    # are invisible here, and a `%` range is refused whole rather than resolved.
+    # Ceiling: a determined free-form command can still bypass this — the
+    # exact gate is proxmox_zfs_destroy_snapshots_by_pattern. Upgrade path:
+    # move snapshot deletion off host_exec entirely (refuse any `zfs destroy`
+    # of a guest dataset here and route it to a typed tool).
+    if pve_snapshots.ZFS_DESTROY_RE.search(params.command):
+        refs = pve_snapshots.snapshot_refs(params.command)
+        if refs:
+            try:
+                registered = await pve_snapshots.load_registered()
+            except RuntimeError as exc:
+                host_ssh.audit_log(params.command, None,
+                                   note=f"REFUSED pve-snapshot-check-failed: {exc}")
+                return (
+                    "Refused: command destroys ZFS snapshots but the PVE guest "
+                    f"configs could not be checked ({exc}). Not running it blind."
+                )
+            hits = pve_snapshots.registered_hits(refs, registered)
+            if hits:
+                host_ssh.audit_log(params.command, None,
+                                   note="REFUSED pve-registered-snapshot")
+                return pve_snapshots.refusal(hits)
 
     try:
         rc, stdout, stderr = await host_ssh.exec_command(

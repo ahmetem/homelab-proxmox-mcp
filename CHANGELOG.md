@@ -5,6 +5,39 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.0] - 2026-10-08
+
+### Security
+- **PVE-registered snapshots can no longer be destroyed with raw `zfs destroy`.**
+  On 2026-10-05 a `proxmox_host_exec` loop (`for s in subvol-…@a,b …; do zfs
+  destroy $P/$s; done`, with `i_understand_data_loss=true`) removed 18
+  snapshots from ZFS that were still `[sections]` in the guest configs; the
+  follow-up `pct delsnapshot` left guests in `lock: snapshot-delete`, and CT 200
+  (Postgres) and CT 202 did not start after the 2026-10-08 reboot (~1.5 h DB
+  outage; incident record in homelab-project `06-known-issues.md`). The rule
+  "delete PVE snapshots only with `pct/qm delsnapshot`" was written down since
+  2026-07-30 but nothing enforced it. New `proxmox_mcp/pve_snapshots.py` reads
+  every guest config's section headers (one SSH call) and the three ZFS-destroy
+  paths refuse any match, pointing to `pct/qm delsnapshot <vmid> <snap>`:
+  - `proxmox_zfs_destroy_snapshots_by_pattern` — exact: checks every match and
+    refuses the whole batch; the dry run lists them up front.
+  - `proxmox_cleanup_vzdump_snapshots` — skips an `@vzdump` that still has a
+    `[vzdump]` section (LXC snapshot-mode vzdump creates it through
+    `PVE::LXC::Config->snapshot_create($vmid, 'vzdump')`, verified in
+    `VZDump/LXC.pm` on the host), removes the rest; the dry run shows the skip.
+  - `proxmox_host_exec` — when the command contains `zfs destroy`, checks every
+    literal `<dataset>@<snap>[,<snap>…]` anywhere in the command (so the
+    incident's loop list is caught although the destroy argument was `$P/$s`).
+    A variable/pool-root dataset is checked against all guests; an `a%b` range
+    on a guest with snapshots is refused whole. Known limit, marked `kisayol:`
+    in the code: names generated at run time (`… | xargs zfs destroy`) are
+    invisible here. Refusals are written to `_host_ssh_audit.log`.
+  No override flag (the incident already carried `i_understand_data_loss`), and
+  an unreadable `/etc/pve` refuses instead of running blind. Unregistered
+  snapshots — sanoid `autosnap_*`, ad-hoc `zfs snapshot` — pass unchanged; no
+  name is special-cased. Covered by `tests/test_pve_snapshot_gate.py` (19 cases,
+  including the incident command verbatim).
+
 ## [1.5.3] - 2026-09-17
 
 ### Added
