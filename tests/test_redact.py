@@ -52,8 +52,9 @@ def test_env_non_secrets_left_alone(monkeypatch):
     monkeypatch.setenv("PROXMOX_TOKEN_NAME", "mcp-server-long")
     monkeypatch.setenv("SMTP_TO", "someone@example.com")
     monkeypatch.setenv("CLAUDE_CODE_ENTRYPOINT", "claude-desktop")
+    monkeypatch.setenv("LANG", "en_US.UTF-8")  # masked once on CT 207 before 1.7.1
     cmd = ("ssh -i /root/.ssh/id_ed25519 root@192.168.1.21 mcp-server-long someone@example.com"
-           " claude-desktop")
+           " claude-desktop LANG=en_US.UTF-8")
     assert redact(cmd) == cmd
 
 

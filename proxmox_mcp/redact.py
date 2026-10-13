@@ -42,7 +42,7 @@ _URL = re.compile(r"^[a-z][a-z0-9+.-]*://")
 
 def _env_secret(name: str, value: str) -> Optional[str]:
     """The part of an env value to mask literally, or None."""
-    if _EXCL_NAME.search(name):
+    if _EXCL_NAME.search(name) or name in _KV_NOT_SECRET:
         return None
     m = _DSN.match(value)
     if m:
@@ -56,10 +56,16 @@ def _env_secret(name: str, value: str) -> Optional[str]:
         or re.fullmatch(r"[\d.:]+", value)                       # number / IP
         or value.lower() in ("true", "false", "yes", "no")
         or re.fullmatch(r"[a-z][a-z_-]*", value)                 # plain word / slug
+        or re.fullmatch(r"[a-z]{2,3}_[A-Z]{2}(\.[\w-]+)?(@\w+)?", value)  # locale (LANG)
         or re.fullmatch(r"[a-z0-9.-]+\.[a-z]{2,}", value)        # hostname
         or re.fullmatch(r"[^@\s]+@[^@\s]+\.[a-z]{2,}", value)    # e-mail
         or re.match(r"([A-Za-z]:[\\/]|/|~/)", value)             # path
         or re.search(r"\s", value)                               # prose
+        or value.startswith("\\")                                # Windows path / UNC
+        # A neutral name needs a secret-like value: long, letters and digits
+        # (OS=Windows_NT, TERM=xterm-256color, PATHEXT are not secrets).
+        or len(value) < 16
+        or not (re.search(r"[A-Za-z]", value) and re.search(r"\d", value))
     ):
         return None
     return value

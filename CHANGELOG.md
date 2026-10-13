@@ -5,6 +5,16 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.1] - 2026-10-13
+
+### Fixed
+- Env-literal redaction masked harmless environment values: on CT 207 one
+  `LANG=en_US.UTF-8` occurrence became `<gizli:LANG>` during the 1.7.0 clean-up
+  (irreversible, harmless), and on Windows `OS`, `TERM`, `PATHEXT`, `HOMEPATH`
+  and `PWD` qualified. A neutral-named variable now needs a secret-like value
+  (≥16 chars, letters and digits); locales, `\`-paths and `PWD`/`OLDPWD` are
+  excluded. Secret-named variables and the pattern layer are unchanged.
+
 ## [1.7.0] - 2026-10-13
 
 ### Security
