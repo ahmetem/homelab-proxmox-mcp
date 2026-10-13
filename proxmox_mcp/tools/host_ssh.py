@@ -74,7 +74,8 @@ async def proxmox_host_exec(params: HostExecInput) -> str:
     refused outright — no flag overrides it; use `pct/qm delsnapshot`.
     Sanoid `autosnap_*` and other unregistered snapshots are unaffected.
 
-    Every call is recorded in _host_ssh_audit.log next to the package.
+    Every call is recorded in _host_ssh_audit.log next to the package, with
+    secrets in the command and output previews masked.
 
     Prefer the typed API tools (proxmox_list_disks, proxmox_zfs_*,
     proxmox_snapshot, etc.) when one exists for the task — this

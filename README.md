@@ -217,7 +217,15 @@ also accept `dry_run=true`, which returns the exact API call they would make
 **Tamper-evident audit.** Every host/guest SSH exec is appended to a
 hash-chained log (SHA-256, or HMAC-SHA256 with `PROXMOX_AUDIT_HMAC_KEY`).
 `proxmox_audit_verify` recomputes the chain (INTACT/BROKEN) and, with `tail=N`,
-replays the most recent entries.
+replays the most recent entries. Before a line is hashed, secrets in the command
+and the output previews are masked (1.7.0, `proxmox_mcp/redact.py`): values of
+secret-looking variables in the server's environment become `<gizli:NAME>`, and
+secret-shaped text that was never in that environment (`NAME=value` with a
+secret-ish name, credentials in a URL, `Bearer …`, PVE/PBS API tokens, PEM
+private keys, `sk-ant-…`/`ghp_…`/Telegram tokens, a base64 blob hiding any of
+these) becomes `<gizli>`. The log file is created `0600`. For a log written
+before 1.7.0, `audit.rewrite_redacted(path)` masks it in place and rebuilds the
+chain (an already-broken link stays broken).
 
 **Safety in action** — a destructive request is refused, previewed, then
 applied only after explicit consent, and stays on the audit trail:

@@ -177,7 +177,14 @@ En yüksek sonuçlu mutasyonlar — `proxmox_create_vm`,
 ayrıca `dry_run=true` kabul eder; bu, çalıştırmadan yapacakları tam API
 çağrısını (secret'lar maskeli) döndürür. Her host/guest SSH exec'i,
 `proxmox_audit_verify` ile istediğin an doğrulayabileceğin hash-zincirli bir
-audit log'una kaydedilir.
+audit log'una kaydedilir. Satır hash'lenmeden önce komut ve çıktı önizlemelerindeki
+sırlar maskelenir (1.7.0, `proxmox_mcp/redact.py`): sunucu ortamındaki sır gibi
+görünen değişkenlerin değerleri `<gizli:AD>`, o ortamda hiç bulunmamış sır biçimli
+metin (sır çağrışımlı adla `AD=değer`, URL'deki kimlik bilgisi, `Bearer …`,
+PVE/PBS API token'ı, PEM private key, `sk-ant-…`/`ghp_…`/Telegram token'ı, bunları
+saklayan base64 blob) `<gizli>` olur. Log dosyası `0600` yaratılır. 1.7.0 öncesi
+yazılmış bir log için `audit.rewrite_redacted(path)` dosyayı yerinde maskeler ve
+zinciri yeniden kurar (önceden kırık bir halka kırık kalır).
 
 **PVE'de kayıtlı snapshot'lar ham ZFS ile silinmez (1.6.0).** `pct/qm snapshot`
 ile alınan snapshot'ın guest config'inde bir de `[ad]` bölümü vardır; yalnız ZFS

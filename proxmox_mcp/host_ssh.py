@@ -26,6 +26,7 @@ except ImportError:
     asyncssh = None  # type: ignore
 
 from proxmox_mcp import audit, config
+from proxmox_mcp.redact import redact
 
 
 # Same cap as the other SSH modules
@@ -95,10 +96,10 @@ def audit_log(
         "host": config.PROXMOX_SSH_HOST,
         "user": config.PROXMOX_SSH_USER,
         "rc": rc,
-        "cmd": cmd[:500],
+        "cmd": redact(cmd)[:500],  # redact before cutting a secret in half
         "note": note,
-        "stdout_preview": stdout_preview[:200],
-        "stderr_preview": stderr_preview[:200],
+        "stdout_preview": redact(stdout_preview)[:200],
+        "stderr_preview": redact(stderr_preview)[:200],
     })
 
 

@@ -10,15 +10,23 @@ Without a key the chain is *integrity-evident*: it catches accidental
 corruption, truncation and deletion. With a key it is *tamper-evident*: an
 attacker who cannot read the key cannot forge a valid chain. Logging never
 raises — a logging failure must never break the operation being logged.
+
+Every string field is passed through proxmox_mcp.redact before hashing, so the
+chain covers the masked text. The file is created 0600 (it records commands
+and output previews from the host).
 """
 from __future__ import annotations
 
+import datetime as _dt
 import hashlib
 import hmac
 import json
 import os
+from collections import Counter
 from pathlib import Path
 from typing import Any, Optional
+
+from proxmox_mcp.redact import redact, redact_counted
 
 
 def _key() -> Optional[bytes]:
@@ -70,10 +78,13 @@ def _last_hash(path: Path) -> str:
 def append(path: Path, entry: dict) -> None:
     """Append `entry` as one hash-chained JSON line. Never raises."""
     try:
-        base = dict(entry)
+        base = {k: redact(v) if isinstance(v, str) else v for k, v in entry.items()}
         base["prev"] = _last_hash(path)
         base["hash"] = _digest(base, _key())
-        with path.open("a", encoding="utf-8") as f:
+        fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+        with os.fdopen(fd, "a", encoding="utf-8") as f:
+            if hasattr(os, "fchmod") and os.fstat(fd).st_mode & 0o077:
+                os.fchmod(fd, 0o600)  # heal logs created 0644 before 1.7.0
             f.write(json.dumps(base, ensure_ascii=False) + "\n")
     except Exception:
         pass  # never let logging break a real call
@@ -161,3 +172,74 @@ def verify_chain(path: Path) -> dict:
     except Exception as exc:  # pragma: no cover
         _break(0, f"read error: {type(exc).__name__}")
     return result
+
+
+def rewrite_redacted(path: Path, note: str = "") -> dict:
+    """Redact secrets already sitting in `path` and rebuild the hash chain.
+
+    One-off maintenance for logs written before redaction existed. Every line
+    keeps its position and fields; string fields go through the same redactor
+    as append(). Chained lines get a recomputed `hash`, and each `prev` is
+    mapped from the old hash to the new one, so an intact chain stays intact
+    and a pre-existing break stays visible. Legacy lines stay unchained. When
+    anything changed, the file is replaced atomically (0600) and a marker
+    entry carrying `note` is appended. The redaction is not undoable: the
+    original bytes are not kept anywhere.
+
+    Returns {lines, redacted, rewritten, unparseable, counts: {label: n}, verify}.
+    """
+    counts: Counter = Counter()
+    key = _key()
+    for _attempt in range(3):
+        raw = path.read_bytes()
+        out_lines: list[str] = []
+        new_of: dict[str, str] = {}
+        changed = redacted = unparseable = 0
+        for line in raw.decode("utf-8", "replace").splitlines():
+            try:
+                obj = json.loads(line) if line.strip() else None
+            except ValueError:
+                obj = None
+            if not isinstance(obj, dict):
+                if line.strip():
+                    unparseable += 1
+                out_lines.append(line)
+                continue
+            red = {k: redact_counted(v, counts) if isinstance(v, str) and k not in ("hash", "prev") else v
+                   for k, v in obj.items()}
+            if any(red[k] != obj[k] for k in obj if k not in ("hash", "prev")):
+                redacted += 1
+            if "hash" in obj:
+                old = obj["hash"]
+                red["prev"] = new_of.get(obj.get("prev") or "", obj.get("prev") or "")
+                red.pop("hash")
+                red["hash"] = _digest(red, key)
+                new_of[old] = red["hash"]
+            if red != obj:
+                changed += 1
+                out_lines.append(json.dumps(red, ensure_ascii=False))
+            else:
+                out_lines.append(line)
+        if not changed:
+            return {"lines": len(out_lines), "redacted": 0, "rewritten": 0,
+                    "unparseable": unparseable, "counts": {}, "verify": verify_chain(path)}
+        tmp = path.with_name(path.name + ".redact-tmp")
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
+            f.write("\n".join(out_lines) + "\n")
+            f.flush()
+            os.fsync(f.fileno())
+        if path.stat().st_size != len(raw):  # an append raced us; redo
+            tmp.unlink()
+            counts.clear()
+            continue
+        os.replace(tmp, path)
+        break
+    else:
+        raise RuntimeError("log kept growing during rewrite; retry when idle")
+    passes = sum(counts.values())
+    append(path, {"ts": _dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "rc": None, "cmd": "",
+                  "note": f"redaction rewrite: {redacted} lines masked ({passes} passes), "
+                          f"{changed} rewritten, chain rebuilt" + (f"; {note}" if note else "")})
+    return {"lines": len(out_lines), "redacted": redacted, "rewritten": changed,
+            "unparseable": unparseable, "counts": dict(counts), "verify": verify_chain(path)}

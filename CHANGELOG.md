@@ -5,6 +5,36 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.0] - 2026-10-13
+
+### Security
+- **Secrets are masked in the SSH audit logs before they are written.** The
+  `cmd` field and the output previews were stored verbatim: CT 207's copy held
+  `PBS_TOKEN_SECRET`, `CT209_PG_HA`, `CT202_N8N_DB` and `CT201_IMMICH_JWT_SECRET`
+  (all in `stdout_preview` of commands that printed other CTs' `.env`/DSNs), the
+  local copy six more, and both files were `0644`. New `proxmox_mcp/redact.py`
+  runs inside `audit.append()` on every string field, before the hash, so the
+  chain covers the masked text:
+  - *literal*: secret-looking values in the server's environment →
+    `<gizli:NAME>`; chosen by value as well as name (madde 227 rules), because
+    a name-only mask misses neutral names like `CT209_PG_HA`;
+  - *pattern*: `NAME=value` with a secret-ish name, URL credentials, `Bearer`,
+    PVE/PBS API tokens, `--password …`, PEM private keys, `sk-ant-…`/`ghp_…`/
+    Telegram tokens → `<gizli>`; a base64 blob whose decoded text holds any of
+    these → `<gizli:base64>`.
+  `host_ssh.audit_log` / `vm_ssh.audit_log` redact before the 500/200-char cut so
+  a secret is never left half-visible. Measured on both real logs: every known
+  secret masked (CT 207: 4 → 0, local: 9 → 0).
+- **Audit log file mode `0600`.** Created `0600`; an existing group/other-readable
+  file is tightened on the next append (POSIX).
+
+### Added
+- `audit.rewrite_redacted(path, note)`: one-off clean-up of a log written before
+  1.7.0 — masks every line, rebuilds the hash chain (each `prev` mapped from the
+  old hash, so an already-broken link stays visible), replaces the file
+  atomically `0600` and appends a marker entry. Run on CT 207 and AHMETPC on
+  2026-10-13 (madde 241).
+
 ## [1.6.0] - 2026-10-08
 
 ### Security

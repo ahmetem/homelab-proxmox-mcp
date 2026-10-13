@@ -33,7 +33,7 @@ class AuditVerifyInput(BaseModel):
         le=200,
         description=(
             "Also replay the most recent N recorded entries per log "
-            "(0 = verify only). Read-only; secrets are never stored in the log."
+            "(0 = verify only). Read-only; secrets are masked before a line is written."
         ),
     )
     response_format: ResponseFormat = Field(default=ResponseFormat.MARKDOWN)
