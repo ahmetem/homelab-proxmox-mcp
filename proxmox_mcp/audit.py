@@ -13,7 +13,9 @@ raises — a logging failure must never break the operation being logged.
 
 Every string field is passed through proxmox_mcp.redact before hashing, so the
 chain covers the masked text. The file is created 0600 (it records commands
-and output previews from the host).
+and output previews from the host). Appends from concurrent processes are
+serialised by an exclusive file lock (flock / msvcrt), so the chain survives
+several MCP servers writing the same log.
 """
 from __future__ import annotations
 
@@ -75,17 +77,72 @@ def _last_hash(path: Path) -> str:
     return ""
 
 
+# Windows byte-range locks are mandatory: locking real log bytes would make
+# other processes' reads (_last_hash, verify_chain) fail. One byte far past any
+# realistic EOF is a pure mutex.
+_LOCK_OFFSET = 1 << 40
+
+
+def _lock(fd: int) -> bool:
+    """Exclusive cross-process lock on an open log fd; False if not obtained."""
+    try:
+        if os.name == "nt":
+            import msvcrt
+            import time
+            deadline = time.monotonic() + 10
+            while True:
+                os.lseek(fd, _LOCK_OFFSET, os.SEEK_SET)
+                try:
+                    msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+                    return True
+                except OSError:
+                    if time.monotonic() > deadline:
+                        return False
+                    time.sleep(0.005)  # LK_LOCK retries once a second: too coarse
+        import fcntl
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        return True
+    except Exception:
+        return False
+
+
+def _heal_mode(fd: int) -> None:
+    """Logs created before 1.7.0 were 0644. Strip world bits; strip group bits
+    too unless the log is group-writable on purpose (CT 215: the sage core and
+    its agent uid share it). Not the owner -> leave it, still write."""
+    if not hasattr(os, "fchmod"):
+        return
+    try:
+        mode = os.fstat(fd).st_mode & 0o777
+        healed = mode & ~0o007 if mode & 0o020 else mode & ~0o077
+        if healed != mode:
+            os.fchmod(fd, healed)
+    except OSError:
+        pass
+
+
 def append(path: Path, entry: dict) -> None:
-    """Append `entry` as one hash-chained JSON line. Never raises."""
+    """Append `entry` as one hash-chained JSON line. Never raises.
+
+    Several MCP processes share one log, so reading the tail hash and writing
+    the new line happen under an exclusive lock; otherwise two writers chain
+    to the same `prev` and the chain breaks. If the lock can't be had within
+    ~10 s the line is written anyway: a visible break beats a lost entry."""
     try:
         base = {k: redact(v) if isinstance(v, str) else v for k, v in entry.items()}
-        base["prev"] = _last_hash(path)
-        base["hash"] = _digest(base, _key())
-        fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
-        with os.fdopen(fd, "a", encoding="utf-8") as f:
-            if hasattr(os, "fchmod") and os.fstat(fd).st_mode & 0o077:
-                os.fchmod(fd, 0o600)  # heal logs created 0644 before 1.7.0
-            f.write(json.dumps(base, ensure_ascii=False) + "\n")
+        fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_BINARY", 0), 0o600)
+        try:
+            locked = _lock(fd)
+            _heal_mode(fd)
+            base["prev"] = _last_hash(path)
+            base["hash"] = _digest(base, _key())
+            os.write(fd, (json.dumps(base, ensure_ascii=False) + "\n").encode("utf-8"))
+            if locked and os.name == "nt":
+                import msvcrt
+                os.lseek(fd, _LOCK_OFFSET, os.SEEK_SET)
+                msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+        finally:
+            os.close(fd)  # also releases the POSIX flock
     except Exception:
         pass  # never let logging break a real call
 

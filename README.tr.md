@@ -182,7 +182,10 @@ sırlar maskelenir (1.7.0, `proxmox_mcp/redact.py`): sunucu ortamındaki sır gi
 görünen değişkenlerin değerleri `<gizli:AD>`, o ortamda hiç bulunmamış sır biçimli
 metin (sır çağrışımlı adla `AD=değer`, URL'deki kimlik bilgisi, `Bearer …`,
 PVE/PBS API token'ı, PEM private key, `sk-ant-…`/`ghp_…`/Telegram token'ı, bunları
-saklayan base64 blob) `<gizli>` olur. Log dosyası `0600` yaratılır. 1.7.0 öncesi
+saklayan base64 blob) `<gizli>` olur. Log dosyası `0600` yaratılır (grup-yazılabilir
+bir log grup bitlerini korur; ör. iki servis uid'inin paylaştığı log) ve eşzamanlı
+sunucu süreçlerinin yazımları dosya kilidiyle sıraya girer (1.7.2): aynı logu
+paylaşan birden çok istemci zinciri bozmaz. 1.7.0 öncesi
 yazılmış bir log için `audit.rewrite_redacted(path)` dosyayı yerinde maskeler ve
 zinciri yeniden kurar (önceden kırık bir halka kırık kalır).
 

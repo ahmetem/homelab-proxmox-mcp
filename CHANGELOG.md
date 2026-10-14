@@ -5,6 +5,31 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.2] - 2026-10-14
+
+### Fixed
+- Concurrent MCP processes broke the audit hash chain. Every Claude client
+  starts its own server (AHMETPC runs ~10), and `audit.append()` read the tail
+  hash and appended without a lock, so two writers could chain to the same
+  `prev` — the likely cause of the CT 207 break of 2026-10-08. Reading the tail
+  and writing the line now happen under an exclusive cross-process lock on the
+  log itself (`fcntl.flock` on POSIX, `msvcrt.locking` on Windows on one byte
+  at offset 2^40, so other processes' reads are never blocked). If the lock
+  cannot be had within ~10 s the line is still written: a visible break beats
+  a lost entry. A per-process-file design was rejected: verify/rewrite assume
+  one chain per log, and CT 215's systemd sandbox opens exactly two fixed
+  log paths (`ReadWritePaths=-…/_host_ssh_audit.log`), so no sibling lock or
+  per-process file could be created there either. New test spawns 6 writer
+  processes (failed 3/3 on 1.7.1, passes now).
+- The 1.7.0 permission heal (`0644` → `0600` on append) broke group-shared
+  logs: on CT 215 the sage core (uid `sage`) and its agent uid (`sage-ajan`)
+  share `sage-ajan:sage 0664` logs. The owner's append would strip the group
+  write bit, and a non-owner's append raised in `fchmod` and silently dropped
+  the entry. The heal now strips world bits always and group bits only when
+  the log is not group-writable (`0644` → `0600`, `0664` → `0660`); a failed
+  `fchmod` no longer drops the line. Lines are written as raw bytes (LF on
+  Windows too).
+
 ## [1.7.1] - 2026-10-13
 
 ### Fixed

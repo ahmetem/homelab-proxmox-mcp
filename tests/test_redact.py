@@ -145,6 +145,11 @@ def test_log_created_0600_and_healed():
     os.chmod(p, 0o644)
     audit.append(p, {"cmd": "b"})
     assert stat.S_IMODE(p.stat().st_mode) == 0o600
+    # A deliberately group-shared log (CT 215: sage + sage-ajan) keeps its
+    # group bits; only the world bits go.
+    os.chmod(p, 0o664)
+    audit.append(p, {"cmd": "c"})
+    assert stat.S_IMODE(p.stat().st_mode) == 0o660
 
 
 def _write_polluted(p: Path) -> None:

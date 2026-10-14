@@ -223,7 +223,10 @@ secret-looking variables in the server's environment become `<gizli:NAME>`, and
 secret-shaped text that was never in that environment (`NAME=value` with a
 secret-ish name, credentials in a URL, `Bearer …`, PVE/PBS API tokens, PEM
 private keys, `sk-ant-…`/`ghp_…`/Telegram tokens, a base64 blob hiding any of
-these) becomes `<gizli>`. The log file is created `0600`. For a log written
+these) becomes `<gizli>`. The log file is created `0600` (a group-writable
+log keeps its group bits, e.g. two service uids sharing it), and appends from
+concurrent server processes are serialised by a file lock (1.7.2), so several
+clients sharing one log keep the chain intact. For a log written
 before 1.7.0, `audit.rewrite_redacted(path)` masks it in place and rebuilds the
 chain (an already-broken link stays broken).
 

@@ -87,6 +87,33 @@ def test_missing_file_is_ok():
     assert r["exists"] is False and r["ok"] is True and r["chained"] == 0
 
 
+_WRITER = """
+import sys
+sys.path.insert(0, sys.argv[1])
+from pathlib import Path
+from proxmox_mcp import audit
+for i in range(int(sys.argv[4])):
+    audit.append(Path(sys.argv[2]), {"ts": f"{sys.argv[3]}-{i}", "cmd": "x" * 2000, "rc": 0})
+"""
+
+
+def test_concurrent_processes_keep_chain_intact():
+    """Several MCP processes share one log (AHMETPC runs ~10). Without a lock
+    two of them read the same tail hash and the second line's `prev` breaks
+    the chain (the CT 207 break of 2026-10-08)."""
+    import subprocess
+    os.environ.pop("PROXMOX_AUDIT_HMAC_KEY", None)
+    p = _tmp()
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    procs, per = 6, 60
+    ps = [subprocess.Popen([sys.executable, "-c", _WRITER, root, str(p), str(n), str(per)])
+          for n in range(procs)]
+    assert all(x.wait(timeout=120) == 0 for x in ps)
+    r = audit.verify_chain(p)
+    assert r["chained"] == procs * per, r
+    assert r["ok"], r
+
+
 def _run_standalone():
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     failed = 0
