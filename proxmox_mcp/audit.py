@@ -15,7 +15,8 @@ Every string field is passed through proxmox_mcp.redact before hashing, so the
 chain covers the masked text. The file is created 0600 (it records commands
 and output previews from the host). Appends from concurrent processes are
 serialised by an exclusive file lock (flock / msvcrt), so the chain survives
-several MCP servers writing the same log.
+several MCP servers writing the same log; rewrite_redacted() takes the same
+lock and rewrites in place, so it can't lose a line appended meanwhile.
 """
 from __future__ import annotations
 
@@ -106,6 +107,14 @@ def _lock(fd: int) -> bool:
         return False
 
 
+def _unlock(fd: int, locked: bool) -> None:
+    """Release a Windows byte lock; POSIX flock goes with os.close(fd)."""
+    if locked and os.name == "nt":
+        import msvcrt
+        os.lseek(fd, _LOCK_OFFSET, os.SEEK_SET)
+        msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+
+
 def _heal_mode(fd: int) -> None:
     """Logs created before 1.7.0 were 0644. Strip world bits; strip group bits
     too unless the log is group-writable on purpose (CT 215: the sage core and
@@ -137,10 +146,7 @@ def append(path: Path, entry: dict) -> None:
             base["prev"] = _last_hash(path)
             base["hash"] = _digest(base, _key())
             os.write(fd, (json.dumps(base, ensure_ascii=False) + "\n").encode("utf-8"))
-            if locked and os.name == "nt":
-                import msvcrt
-                os.lseek(fd, _LOCK_OFFSET, os.SEEK_SET)
-                msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+            _unlock(fd, locked)
         finally:
             os.close(fd)  # also releases the POSIX flock
     except Exception:
@@ -231,6 +237,20 @@ def verify_chain(path: Path) -> dict:
     return result
 
 
+def _read_all(fd: int) -> bytes:
+    os.lseek(fd, 0, os.SEEK_SET)
+    chunks = []
+    while chunk := os.read(fd, 1 << 20):
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+def _write_all(fd: int, data: bytes) -> None:
+    view = memoryview(data)
+    while view:
+        view = view[os.write(fd, view):]
+
+
 def rewrite_redacted(path: Path, note: str = "") -> dict:
     """Redact secrets already sitting in `path` and rebuild the hash chain.
 
@@ -239,33 +259,44 @@ def rewrite_redacted(path: Path, note: str = "") -> dict:
     as append(). Chained lines get a recomputed `hash`, and each `prev` is
     mapped from the old hash to the new one, so an intact chain stays intact
     and a pre-existing break stays visible. Legacy lines stay unchained. When
-    anything changed, the file is replaced atomically (0600) and a marker
-    entry carrying `note` is appended. The redaction is not undoable: the
-    original bytes are not kept anywhere.
+    anything changed, a marker entry carrying `note` is appended. The redaction
+    is not undoable: the original bytes are not kept anywhere.
+
+    Concurrent appends are never lost. The slow redaction pass runs unlocked
+    (a 6 MB log takes ~10 s, the Windows append lock gives up after ~10 s);
+    then, under append()'s lock, the lines appended meanwhile are redacted too
+    and the file is rewritten in place through the locked fd. Replacing the
+    file instead would orphan an appender already waiting on the old inode's
+    lock, and Windows refuses to replace a file another process has open. In
+    place also keeps the log's owner and mode (a root-run rewrite on CT 215
+    must not leave a root-owned log). The new content is first fsync'd to
+    `<log>.redact-tmp`; if that file survives, the in-place write was cut
+    short and it is the complete rewritten log.
 
     Returns {lines, redacted, rewritten, unparseable, counts: {label: n}, verify}.
+    Raises if the lock can't be had or the log shrank under it (rotated?).
     """
     counts: Counter = Counter()
     key = _key()
-    for _attempt in range(3):
-        raw = path.read_bytes()
-        out_lines: list[str] = []
-        new_of: dict[str, str] = {}
-        changed = redacted = unparseable = 0
-        for line in raw.decode("utf-8", "replace").splitlines():
+    new_of: dict[str, str] = {}
+    out_lines: list[str] = []
+    st = Counter()
+
+    def redact_lines(data: bytes) -> None:
+        for line in data.decode("utf-8", "replace").splitlines():
             try:
                 obj = json.loads(line) if line.strip() else None
             except ValueError:
                 obj = None
             if not isinstance(obj, dict):
                 if line.strip():
-                    unparseable += 1
+                    st["unparseable"] += 1
                 out_lines.append(line)
                 continue
             red = {k: redact_counted(v, counts) if isinstance(v, str) and k not in ("hash", "prev") else v
                    for k, v in obj.items()}
             if any(red[k] != obj[k] for k in obj if k not in ("hash", "prev")):
-                redacted += 1
+                st["redacted"] += 1
             if "hash" in obj:
                 old = obj["hash"]
                 red["prev"] = new_of.get(obj.get("prev") or "", obj.get("prev") or "")
@@ -273,30 +304,49 @@ def rewrite_redacted(path: Path, note: str = "") -> dict:
                 red["hash"] = _digest(red, key)
                 new_of[old] = red["hash"]
             if red != obj:
-                changed += 1
+                st["changed"] += 1
                 out_lines.append(json.dumps(red, ensure_ascii=False))
             else:
                 out_lines.append(line)
-        if not changed:
-            return {"lines": len(out_lines), "redacted": 0, "rewritten": 0,
-                    "unparseable": unparseable, "counts": {}, "verify": verify_chain(path)}
-        tmp = path.with_name(path.name + ".redact-tmp")
-        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
-            f.write("\n".join(out_lines) + "\n")
-            f.flush()
-            os.fsync(f.fileno())
-        if path.stat().st_size != len(raw):  # an append raced us; redo
-            tmp.unlink()
-            counts.clear()
-            continue
-        os.replace(tmp, path)
-        break
-    else:
-        raise RuntimeError("log kept growing during rewrite; retry when idle")
+
+    fd = os.open(path, os.O_RDWR | getattr(os, "O_BINARY", 0))
+    try:
+        raw = _read_all(fd)
+        done = raw[:raw.rfind(b"\n") + 1]  # whole lines only; a line may be mid-append
+        redact_lines(done)
+        locked = _lock(fd)
+        if not locked:
+            raise RuntimeError("audit log lock not obtained; retry when idle")
+        try:
+            raw = _read_all(fd)
+            if not raw.startswith(done):
+                raise RuntimeError("log shrank or changed during rewrite (rotated?); nothing written")
+            redact_lines(raw[len(done):])
+            if st["changed"]:
+                data = ("\n".join(out_lines) + "\n").encode("utf-8")
+                tmp = path.with_name(path.name + ".redact-tmp")
+                tfd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_BINARY", 0), 0o600)
+                try:
+                    _write_all(tfd, data)
+                    os.fsync(tfd)
+                finally:
+                    os.close(tfd)
+                os.lseek(fd, 0, os.SEEK_SET)
+                _write_all(fd, data)
+                os.ftruncate(fd, len(data))
+                os.fsync(fd)
+                tmp.unlink()
+        finally:
+            _unlock(fd, locked)
+    finally:
+        os.close(fd)  # also releases the POSIX flock; append() below locks anew
+    changed, redacted = st["changed"], st["redacted"]
+    if not changed:
+        return {"lines": len(out_lines), "redacted": 0, "rewritten": 0,
+                "unparseable": st["unparseable"], "counts": {}, "verify": verify_chain(path)}
     passes = sum(counts.values())
     append(path, {"ts": _dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "rc": None, "cmd": "",
                   "note": f"redaction rewrite: {redacted} lines masked ({passes} passes), "
                           f"{changed} rewritten, chain rebuilt" + (f"; {note}" if note else "")})
     return {"lines": len(out_lines), "redacted": redacted, "rewritten": changed,
-            "unparseable": unparseable, "counts": dict(counts), "verify": verify_chain(path)}
+            "unparseable": st["unparseable"], "counts": dict(counts), "verify": verify_chain(path)}

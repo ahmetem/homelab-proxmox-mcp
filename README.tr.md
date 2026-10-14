@@ -187,7 +187,8 @@ bir log grup bitlerini korur; ör. iki servis uid'inin paylaştığı log) ve e�
 sunucu süreçlerinin yazımları dosya kilidiyle sıraya girer (1.7.2): aynı logu
 paylaşan birden çok istemci zinciri bozmaz. 1.7.0 öncesi
 yazılmış bir log için `audit.rewrite_redacted(path)` dosyayı yerinde maskeler ve
-zinciri yeniden kurar (önceden kırık bir halka kırık kalır).
+zinciri yeniden kurar (önceden kırık bir halka kırık kalır); aynı kilidi aldığı
+için bu sırada eklenen satırlar kaybolmaz, dosyanın sahibi ve izni korunur (1.7.3).
 
 **PVE'de kayıtlı snapshot'lar ham ZFS ile silinmez (1.6.0).** `pct/qm snapshot`
 ile alınan snapshot'ın guest config'inde bir de `[ad]` bölümü vardır; yalnız ZFS

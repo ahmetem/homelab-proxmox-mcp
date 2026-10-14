@@ -180,3 +180,39 @@ def test_rewrite_redacted_rebuilds_chain():
     # A clean log is left byte-for-byte alone (no marker either).
     before = p.read_bytes()
     assert audit.rewrite_redacted(p)["rewritten"] == 0 and p.read_bytes() == before
+
+
+def test_rewrite_redacted_keeps_concurrent_appends():
+    """madde 256: rewrite took no lock and swapped the file with os.replace, so
+    a line appended between its size check and the replace was silently lost
+    (the rebuilt chain is self-consistent, verify_chain can't see it)."""
+    import subprocess
+    import time
+    from test_audit import _WRITER
+    p = _tmp()
+    seeded, prev, lines = 1500, "", []
+    for i in range(seeded):
+        e = {"ts": f"seed-{i}", "cmd": "cat .env", "rc": 0,
+             "stdout_preview": f"N8N_TOKEN={FAKE} " + "y" * 2000, "prev": prev}
+        e["hash"] = prev = audit._digest(e, None)
+        lines.append(json.dumps(e))
+    p.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    size0 = p.stat().st_size
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    procs, per = 4, 1000
+    ps = [subprocess.Popen([sys.executable, "-c", _WRITER, root, str(p), f"w{n}", str(per)])
+          for n in range(procs)]
+    deadline = time.monotonic() + 30
+    while p.stat().st_size == size0 and time.monotonic() < deadline:
+        time.sleep(0.01)  # start once the writers are actually appending
+    r = audit.rewrite_redacted(p, note="race")
+    assert all(x.wait(timeout=120) == 0 for x in ps)
+    assert r["redacted"] == seeded
+    text = p.read_text(encoding="utf-8")
+    assert FAKE not in text
+    ts = {json.loads(x)["ts"] for x in text.splitlines()}
+    missing = {f"w{n}-{i}" for n in range(procs) for i in range(per)} - ts
+    assert not missing, f"{len(missing)} appended lines lost"
+    v = audit.verify_chain(p)
+    assert v["ok"] and v["chained"] == seeded + procs * per + 1, v  # +1 marker
+    assert not p.with_name(p.name + ".redact-tmp").exists()

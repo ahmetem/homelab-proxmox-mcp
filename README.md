@@ -228,7 +228,8 @@ log keeps its group bits, e.g. two service uids sharing it), and appends from
 concurrent server processes are serialised by a file lock (1.7.2), so several
 clients sharing one log keep the chain intact. For a log written
 before 1.7.0, `audit.rewrite_redacted(path)` masks it in place and rebuilds the
-chain (an already-broken link stays broken).
+chain (an already-broken link stays broken); it takes the same lock, so lines
+appended meanwhile are kept, and the file keeps its owner and mode (1.7.3).
 
 **Safety in action** — a destructive request is refused, previewed, then
 applied only after explicit consent, and stays on the audit trail:

@@ -5,6 +5,26 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.3] - 2026-10-14
+
+### Fixed
+- `audit.rewrite_redacted()` could silently lose an audit line. It took no
+  lock: it compared the file size, then swapped in the rewritten file with
+  `os.replace`, so a line another MCP process appended between the two was
+  dropped — and the rebuilt chain stayed self-consistent, so `verify_chain`
+  could not see it (reproduced; under steady appends it instead failed with
+  "log kept growing"). The slow redaction pass still runs unlocked (a 6 MB log
+  takes ~10 s, longer than the Windows append lock's ~10 s wait); then, under
+  `append()`'s lock, lines appended meanwhile are redacted too and the file is
+  rewritten **in place** through the locked fd. A locked `os.replace` would
+  not do: an appender waiting on the old inode's lock would write into the
+  orphaned file, and Windows refuses to replace a file another process has
+  open. In place also keeps the log's owner and mode, so a root-run rewrite
+  on CT 215 no longer leaves a root-owned log the agent uid can't write. The
+  new content is first fsync'd to `<log>.redact-tmp`; a surviving tmp means
+  the in-place write was cut short and is the complete rewritten log. New test
+  races 4 writer processes against a rewrite (failed 3/3 on 1.7.2, passes now).
+
 ## [1.7.2] - 2026-10-14
 
 ### Fixed
