@@ -216,3 +216,16 @@ def test_rewrite_redacted_keeps_concurrent_appends():
     v = audit.verify_chain(p)
     assert v["ok"] and v["chained"] == seeded + procs * per + 1, v  # +1 marker
     assert not p.with_name(p.name + ".redact-tmp").exists()
+
+
+def test_rewrite_redacted_refuses_over_leftover_tmp():
+    """A surviving .redact-tmp is the only complete copy after a cut-short
+    in-place write; a re-run must not truncate it."""
+    p = _tmp()
+    _write_polluted(p)
+    before = p.read_bytes()
+    tmp = p.with_name(p.name + ".redact-tmp")
+    tmp.write_bytes(b"recovery copy\n")
+    with pytest.raises(RuntimeError, match="redact-tmp present"):
+        audit.rewrite_redacted(p)
+    assert tmp.read_bytes() == b"recovery copy\n" and p.read_bytes() == before

@@ -5,6 +5,17 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.4] - 2026-10-14
+
+### Fixed
+- A re-run of `audit.rewrite_redacted()` wiped the recovery copy. After an
+  in-place write cut short, `<log>.redact-tmp` is the only complete rewritten
+  log, but the next call opened it with `O_TRUNC` before touching the log —
+  exactly what an operator re-running the tool on a truncated log would do.
+  The call now refuses while that file exists. Documented trade-off of 1.7.3:
+  the in-place write is not atomic for unlocked readers, so a `verify_chain`
+  overlapping it may report a transient break that is gone on retry.
+
 ## [1.7.3] - 2026-10-14
 
 ### Fixed

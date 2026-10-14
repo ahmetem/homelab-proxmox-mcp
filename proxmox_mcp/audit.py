@@ -271,11 +271,18 @@ def rewrite_redacted(path: Path, note: str = "") -> dict:
     place also keeps the log's owner and mode (a root-run rewrite on CT 215
     must not leave a root-owned log). The new content is first fsync'd to
     `<log>.redact-tmp`; if that file survives, the in-place write was cut
-    short and it is the complete rewritten log.
+    short and it is the complete rewritten log; a later call refuses to run
+    while it exists. Unlike a replace, the in-place write is not atomic for
+    unlocked readers: a verify_chain overlapping it may report a transient
+    break that is gone on retry.
 
     Returns {lines, redacted, rewritten, unparseable, counts: {label: n}, verify}.
     Raises if the lock can't be had or the log shrank under it (rotated?).
     """
+    tmp = path.with_name(path.name + ".redact-tmp")
+    if tmp.exists():  # O_TRUNC below would wipe the only complete copy
+        raise RuntimeError(f"{tmp.name} present: a previous rewrite was cut short; "
+                           "restore it over the log (or delete it) first")
     counts: Counter = Counter()
     key = _key()
     new_of: dict[str, str] = {}
@@ -324,7 +331,6 @@ def rewrite_redacted(path: Path, note: str = "") -> dict:
             redact_lines(raw[len(done):])
             if st["changed"]:
                 data = ("\n".join(out_lines) + "\n").encode("utf-8")
-                tmp = path.with_name(path.name + ".redact-tmp")
                 tfd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_BINARY", 0), 0o600)
                 try:
                     _write_all(tfd, data)
