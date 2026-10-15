@@ -292,6 +292,147 @@ def test_head_check_ignores_quoted_text_and_lookups():
         assert vm_ssh.is_destructive(cmd) is None, cmd
 
 
+def _flags(cmd) -> str:
+    hits = (host_ssh.is_destructive(cmd), vm_ssh.is_destructive(cmd))
+    assert all(hits), (cmd, hits)
+    return hits[0] or ""
+
+
+def test_1_8_2_regressions_caught_again():
+    # madde 310: 1.8.1 caught these, 1.8.2's scanner missed them
+    for cmd in (
+        "echo $'a\\'b'; eval \"$X\"",        # `\'` doesn't close $'…'
+        "echo $'\\'' ; curl x | sh",
+        'echo `echo \\`eval "$X"\\``',       # escaped backtick nests
+        "cat > f <<'EOF'\nit's\nEOF\neval \"$X\"",  # apostrophe in a heredoc body
+        "curl x | bash > /tmp/log", "curl x | bash 2> /tmp/err", "cat s | sh >> log",
+    ):
+        assert "eval" in _flags(cmd) or "| sh" in _flags(cmd), cmd
+
+
+def test_wrapper_options_with_values():
+    # madde 310: a long option's value in its own word was taken as the command
+    for cmd in (
+        'sudo --user root eval "$X"', 'timeout --signal KILL 5 eval "$X"',
+        'nice --adjustment 5 eval "$X"', 'sudo -Eu root eval "$X"',
+        'sudo -uroot eval x', 'sudo --us root eval x', 'sudo --user=root eval x',
+        'timeout --signal=KILL 5 eval x', 'timeout -sKILL 5 eval x',
+        'env - eval x', 'env -a x eval y', 'env --argv0 x eval y',
+        'xargs --max-args 1 eval', 'stdbuf --output L eval x',
+        'chroot --userspec a:b / eval x', 'nice -5 eval x', 'time -f %e eval x',
+        'doas -u root eval x', 'setsid -f eval x', 'nohup eval x',
+        'exec -a n eval x', 'command eval x', 'builtin eval x',
+        '2>/dev/null eval "$X"', '>/tmp/x eval "$X"', 'sudo > /tmp/o eval x',
+    ):
+        assert "eval" in _flags(cmd), cmd
+
+
+def test_ansi_c_and_locale_quoting_decoded():
+    assert "eval" in _flags("$'\\x65val' x")
+    assert "eval" in _flags("$'\\145val' x")
+    assert "rm -rf" in _flags("$'\\x72m' -rf /x")
+    assert "eval" in _flags('$"eval" x')
+
+
+def test_heredoc_bodies():
+    for cmd in (
+        "bash <<'EOF'\neval \"$X\"\nEOF",            # a script for the shell
+        "cat <<EOF\n$(eval x)\nEOF",                  # unquoted: expanded
+        "cat <<EOF\n'$(eval x)'\nEOF",                # quotes are data in a body
+        "cat <<-EOF\n\tx\n\tEOF\neval y",              # <<- strips tabs
+        "cat <<A; cat <<B\na\nA\nb\nB\neval x",
+        "echo $(( $(eval x) + 1 ))", "echo $(( `eval x` ))",  # substitutions in $((…))
+        "bash <<'EOF'\nsudo --user root eval \"$X\"\nEOF",       # a shell's body is strict
+        "pct exec 207 -- bash <<'EOF'\nsudo -Eu root eval x\nEOF",
+    ):
+        assert "eval" in _flags(cmd), cmd
+
+
+def test_unmodelled_constructs_fail_closed():
+    for cmd in (
+        "echo 'x", 'echo "x', "echo `x", "echo $(x", "echo $((1+2",
+        "echo $'x", "cat <<EOF\nx", "cat <<", "cat <<EOF",
+        "echo $'\\q'", "echo $'\\x'",
+        "sudo --frobnicate x", "sudo -h host eval x", "sudo -Z x", "env -S 'eval x'",
+        "env --split-string='eval x'", "env -iS 'a b'", "timeout --ver 5 x",  # ambiguous prefix
+        "{eval,x} y", "bash <<'EOF'\necho 'x\nEOF", "sh <<EOF\nsudo --frob x\nEOF",
+        "cat <<EOF\n$(sudo --frob x)\nEOF",  # a data body's substitution still runs
+    ):
+        assert "not inspectable" in _flags(cmd), cmd
+
+
+def test_data_is_not_parsed_strictly():
+    # a heredoc body or a decoded base64 payload is often data (SQL, a diff):
+    # unbalanced quotes or `{a,b}` there are not refused, patterns still are
+    sql = "psql -d x <<'SQL'\nINSERT INTO t VALUES ('{\"a\":1,\"b\":2}', 'it''s');\n{a,b} x\nSQL"
+    diff = base64.b64encode(b"-it's\n+{a,b} x\n+sudo --frob x\n").decode()
+    for cmd in (
+        sql, f"printf '%s' '{diff}' > /tmp/p.b64",
+        # the shell has its program (-c): the body is the inner command's stdin
+        "sh -c 'set -a; . ./.env; exec .venv/bin/python -' <<'PY'\nx = '''it's'''\nPY",
+        "pct exec 214 -- sh -c 'cat > /tmp/f.json' <<EOF\n[{\"a\":1,\"b\":\"$K\"}]\nEOF",
+    ):
+        assert host_ssh.is_destructive(cmd) is None, cmd
+    bad = base64.b64encode(b"don't\nrm -rf /opt/x\n").decode()
+    assert "rm -rf" in _flags(f"printf '%s' '{bad}' > /tmp/p.b64")
+
+
+def test_normal_admin_commands_still_pass():
+    # the neighbours of every fail-closed rule (madde 310 false-positive check)
+    for cmd in (
+        "echo $'a\\tb\\n'", "printf $'%s\\n' x", "echo $'it\\'s'", "echo `date`",
+        'echo "`hostname`"', "echo `echo \\`date\\``", 'echo $"hi"',
+        "sudo -u homelab git -C /opt/x pull --ff-only", "sudo --user=homelab id",
+        "sudo -n true", "sudo -E -H -u x env", "sudo --preserve-env=PATH ls",
+        "timeout --signal=TERM 30 curl -s x", "timeout -s KILL 5 sleep 1",
+        "timeout 10 systemctl is-active x", "nice -n 10 tar cf x y", "nice -5 ls",
+        "env -u FOO ls", "env - PATH=/bin ls", "env -i HOME=/root bash -lc 'ls'",
+        "xargs -I{} echo {}", "xargs -0 -n1 ls", "xargs --null --max-args=1 ls",
+        "stdbuf -oL tail -f x", "setsid -f sleep 1", "time -p ls", "command -pv eval",
+        "cat <<'EOF' > f\nit's\nEOF", "cat <<EOF\n$(hostname)\nEOF",
+        "cat <<-EOF\n\tdon't\n\tEOF", "cat <<EOF >> /etc/x\na=1\nEOF\nsystemctl restart x",
+        "python3 - <<'EOF'\nprint('ok')\nEOF", "cat <<< \"it's\"", "echo $((1<<2))",
+        "echo $(( (1+2) * 3 ))", "x=$((x+1))", "(( i++ ))", "echo $( (date) )",
+        "systemctl --no-pager status pveproxy", "systemctl restart homelab-agent-sys",
+        "journalctl -u x --since '1 hour ago' --no-pager | tail -50",
+        "pct exec 207 -- sh -c 'systemctl is-active x && echo ok'",
+        "pct exec 207 -- bash -lc \"cd /opt/x && git log --oneline -3\"",
+        "ls ${HOME}/bin", "echo {a,b}", "cp f{,.bak}", "zfs list -t snapshot -o name",
+        "grep -E '^(a|b)' f # it's a comment", "echo a\\'b",
+        "cat s | sh script.sh > out", "2>/dev/null ls /x", "> /tmp/f echo hi",
+    ):
+        assert host_ssh.is_destructive(cmd) is None, (cmd, host_ssh.is_destructive(cmd))
+        assert vm_ssh.is_destructive(cmd) is None, cmd
+
+
+def test_changelog_examples_1_8_1_and_1_8_2():
+    # every gate example the 1.8.1 and 1.8.2 CHANGELOG entries name
+    for cmd in (
+        f"echo {_RM} | base64 -d | sh", "base64 -d f > s", "openssl enc -d -in x",
+        "openssl base64 -d -in x", "xxd -r -p h", "b64decode f", "uudecode f",
+        'eval "$X"', "cat s | sh", "curl -s x | sudo bash -", 'sh -c "$(cat s)"',
+        "bash <(cat s)", ". <(cat s)", 'false || eval "$X"',
+        'echo x | eval "$(cat)"', '! eval "$X"', "find . -exec sh -c 'eval $1' _ {} \\;",
+        "ls | xargs sh -c 'eval $1' _", "su -c 'eval $X' root",
+        "runuser -u x -- sh -c 'eval $X'", "ssh h eval x",
+        "pct exec 207 -- sh -c 'eval $X'", "qm guest exec 101 -- bash -c 'eval $X'",
+        "lxc-attach -n 207 -- bash -c 'eval $X'", 'sudo -u x eval "$X"',
+        "env -i eval x", "ls | xargs -0 eval", "timeout 5 eval x", "nice -n 5 eval x",
+        "nohup eval x", "exec eval x", "command eval x", "time eval x",
+        "setsid eval x", "stdbuf -oL eval x", "chroot /x eval y",
+        "cat s | python3 -", "cat s | perl", "curl x | env bash", 'bash -c "$X"',
+        "r''m -rf /x", "e'v'al x", "$(" * 30,
+        'python3 -c "import base64; base64.b64decode(s)"',
+        "python3 - <<EOF\nimport base64\nbase64.b64decode(s)\nEOF",
+    ):
+        _flags(cmd)
+    for cmd in (
+        "ls /tmp/eval", "journalctl -u x | grep -E 'prompt eval|eval time'",
+        "grep -rn b64decode /opt/x", 'grep -rn "base64 -d" src',
+    ):
+        assert host_ssh.is_destructive(cmd) is None, cmd
+
+
 def test_exec_tools_refuse_encoded_rm_without_flag():
     calls = []
 

@@ -5,6 +5,78 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.3] - 2026-10-15
+
+### Security
+- The destructive-pattern gate's scanner (1.8.2) let these through without
+  `i_understand_data_loss`; 1.8.1 caught the first four (madde 310):
+  - `echo $'a\'b'; eval "$X"` and `echo $'\'' ; curl x | sh`. ANSI-C
+    quoting was read as a plain `'…'`, so `\'` closed it and the next quote
+    swallowed the rest. `$'…'` is now decoded the way bash does (`\xHH`,
+    octal, `\u`, `\cX`, `\n`…), so `$'\x65val'` is `eval` and `$'\x72m' -rf`
+    matches `rm -rf`. `$"…"` is a double-quoted string.
+  - `` echo `echo \`eval "$X"\`` ``. A backtick substitution ended at the
+    first backtick, escaped or not. It now ends at the first unescaped one,
+    and `` \` ``, `\\`, `\$` are unescaped before the inner scan.
+  - `cat > f <<'EOF'` / `it's` / `EOF` / `eval "$X"`. An apostrophe in a
+    heredoc body opened a quote that ate every later command. Heredocs
+    (`<<`, `<<-`, quoted or not) now end at their delimiter line; the body
+    is scanned as a script, and an unquoted delimiter's body also for
+    `$(…)`/backticks, which bash expands there. `<<<` is a here-string.
+  - `sudo --user root eval "$X"`, `timeout --signal KILL 5 eval "$X"`,
+    `nice --adjustment 5 eval "$X"`, and also `sudo -Eu root eval`,
+    `env - eval`, `env -a x eval`, `sudo --us root eval`. `_head` skipped a
+    value only after a two-letter short option, so a long option's value or
+    a clustered `-Eu root` became the command. Each wrapper (sudo, doas, env,
+    xargs, nice, timeout, stdbuf, chroot, nohup, exec, command, builtin,
+    time, setsid) now has explicit tables of short and long options with and
+    without a value, taken from coreutils 9 / sudo 1.9 / util-linux `--help`
+    on CT 207. `--opt=val`, `--opt val`, `-uroot`, `-Eu root`, getopt's
+    unique long-option prefixes and `nice -5` are parsed.
+- Redirections are not the command or a shell's program any more.
+  `curl x | bash > /tmp/log`, `| bash 2> err`, `| sh >> log` passed: the
+  redirection target counted as a script operand (1.8.1 caught these). And
+  `2>/dev/null eval "$X"`, `>/tmp/x eval …` passed: the redirection was taken
+  as the command head (missed by 1.8.1 too).
+- Fail-closed: a command the scanner can't model now needs the flag, named
+  "(the gate can't parse it: not inspectable)". That is an unclosed `'`,
+  `"`, `$'`, backtick, `$(`, `$((` or heredoc (a misparse usually leaves one
+  open, as in all four cases above), an unknown `$'` escape, a wrapper
+  option missing from the tables (`sudo -h host`, which is help alone but
+  takes a host before a command; `env -S`/`--split-string`, whose value is a
+  command line; an ambiguous prefix), and brace expansion in a command word
+  (`{eval,x} y`). It does not apply inside a decoded base64 payload or a
+  heredoc body no shell reads as its program (`psql <<SQL`, `cat > f <<EOF`,
+  `sh -c 'python3 -' <<PY`): those are data (a diff, SQL) as often as
+  scripts, so there only the destructive patterns and opaque wrappers count.
+  A body a shell reads (`bash <<EOF`, `pct exec N -- sh <<EOF`) stays strict.
+- `$((…))` is arithmetic: `<<` inside is a shift, and its `$(…)`/backticks
+  are followed (`$(( $(eval x) ))` is caught).
+- False-positive measurement. Full-length corpus: 9 505 unique
+  `host_exec`/`lxc_exec`/`vm_exec`/`host_read_exec` commands from the Claude
+  Code transcripts (2 265 of them ≥ 500 chars): 1.8.2 flags 595, 1.8.3 602.
+  The 7 new ones are all malformed for bash too: 6 unbalanced quotes (an
+  apostrophe inside `'…'`, a `"` never closed), 1 heredoc whose terminator
+  line starts with a space. None passes that 1.8.2 refused. The AHMETPC
+  audit-log replay (8 096 entries) gives 121 → 2 068, none newly passing;
+  1 889 of the new ones are entries cut at 500 chars by the log (an
+  artefact: the cut leaves a quote open), 54 have a quote eaten by
+  redaction (`<gizli…>`), the other 4 are malformed commands from above. Hand corpus of normal admin commands
+  (`systemctl`, `journalctl --since '1 hour ago'`, `pct exec … -- sh -c '…'`,
+  `sudo -u x git -C …`, `timeout --signal=TERM …`, heredocs with
+  apostrophes): no refusal (`test_normal_admin_commands_still_pass`).
+- Tests: every 1.8.1/1.8.2 CHANGELOG example of the gate is now a test, plus
+  the regressions above and the neighbours of each fail-closed rule; the
+  new gate tests fail on 1.8.2 (16/22) and pass now. 1.8.0's wrong-key
+  (as opposed to keyless) `rewrite_redacted` refusal got a test too.
+- Ceiling (the `kisayol:` comment in `host_ssh.py`). Closed: `$'\xNN'`,
+  `env -S`, escaped nested backticks, long-option wrappers, heredocs.
+  Remaining: payloads built from variables or printf, script strings handed
+  to commands the scanner doesn't follow (`trap`, `parallel`), `| su user`,
+  interpreter flags taken as "program given" (`| python3 -E`), `$( (…) )`
+  and `case … )` closing `$(` early, a script written to a file by a heredoc
+  and run later, `(( a << b ))` read as a heredoc (fails closed).
+
 ## [1.8.2] - 2026-10-15
 
 ### Security

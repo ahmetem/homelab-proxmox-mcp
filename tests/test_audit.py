@@ -200,6 +200,12 @@ def test_rewrite_refuses_wrong_key_even_forced():
     before = p.read_bytes()
     assert _refused(p, "wrong or not loaded", force=True)
     assert p.read_bytes() == before
+    os.environ["PROXMOX_AUDIT_HMAC_KEY"] = "k2"  # loaded but wrong: same refusal
+    try:
+        assert _refused(p, "wrong or not loaded", force=True)
+        assert p.read_bytes() == before
+    finally:
+        os.environ.pop("PROXMOX_AUDIT_HMAC_KEY", None)
     os.environ["PROXMOX_AUDIT_HMAC_KEY"] = "k1"
     try:
         r = audit.rewrite_redacted(p)

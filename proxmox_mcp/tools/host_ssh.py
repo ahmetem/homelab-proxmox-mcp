@@ -51,7 +51,9 @@ class HostExecInput(BaseModel):
             "Also required for wrappers whose content this check cannot "
             "see (base64/xxd decode, eval or a pipe into a shell or "
             "interpreter at any command position, sh -c \"$X\"); base64 "
-            "literals are decoded and checked."
+            "literals are decoded and checked. Also required when the check "
+            "cannot parse the command: an unclosed quote, $( or heredoc, a "
+            "wrapper option it does not know (sudo -h host, env -S)."
         ),
     )
     reason: Optional[str] = Field(default=None, max_length=200)
