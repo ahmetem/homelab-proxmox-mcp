@@ -5,6 +5,38 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.1] - 2026-10-15
+
+### Security
+- The destructive-pattern gate of `proxmox_host_exec`, `proxmox_lxc_exec` and
+  `proxmox_vm_exec` (and the `proxmox_host_read_exec` backstop) no longer
+  misses encoded or wrapped payloads. `echo <base64 of rm -rf …> | base64 -d | sh`
+  ran without `i_understand_data_loss`. Base64 literals in the command are now
+  decoded (nested up to three levels) and checked, so the refusal names the
+  hidden pattern. Independently, wrappers whose content the check can't see
+  need the flag whatever they carry (fail-closed): a decoder (`base64 -d`,
+  `openssl … -d`, `xxd -r`, `b64decode`, `uudecode`), `eval` in command
+  position, a pipe into a shell (`| sh`, `| sudo bash -`), `sh -c "$(…)"` and
+  process substitution into a shell. Both host and guest detectors share this
+  in `host_ssh.is_destructive`. Replayed over the AHMETPC host log (7 990
+  commands), 14 that passed before would now need the flag: 8 `base64 -d`
+  file transfers, 2 of them carrying a script with `rm -rf` / `chmod 700 /`
+  (same rule as a heredoc), a `| bash -` installer, two `eval`s and a
+  `. <(…)`. `/tmp/eval` paths and `grep -E 'prompt eval|eval time'` don't
+  match.
+
+### Fixed
+- The audit chain no longer breaks after an entry containing U+2028, U+2029
+  or U+0085. `json.dumps(ensure_ascii=False)` leaves those raw, and
+  `_last_hash()` / `rewrite_redacted()` split lines with `str.splitlines()`,
+  which treats them as line ends: the next append chained to `""` (verify then
+  reported a prev mismatch) and a rewrite cut such a line in two. Both now split
+  on `"\n"` only, and new lines escape the three characters on disk so other
+  line readers can't split them either. Hashes are unchanged (taken over the
+  unescaped canonical form); existing logs that hold the raw characters verify,
+  chain and rewrite correctly. On the AHMETPC host log old and new code give
+  identical `verify_chain`, `_last_hash` and `rewrite_redacted` results.
+
 ## [1.8.0] - 2026-10-15
 
 ### Security

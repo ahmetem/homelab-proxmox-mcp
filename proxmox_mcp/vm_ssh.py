@@ -37,7 +37,7 @@ try:
 except ImportError:
     asyncssh = None  # type: ignore
 
-from proxmox_mcp import audit, config
+from proxmox_mcp import audit, config, host_ssh
 from proxmox_mcp.redact import redact
 
 
@@ -150,12 +150,9 @@ def resolve(alias: str) -> HostSpec:
 
 
 def is_destructive(cmd: str) -> Optional[str]:
-    """Return the matching destructive pattern (as a string) or None."""
-    for pat in _DESTRUCTIVE_PATTERNS:
-        m = pat.search(cmd)
-        if m:
-            return m.group(0)
-    return None
+    """Return the matching destructive pattern (as a string) or None.
+    Same decoding and opaque-wrapper checks as host_ssh, over this list."""
+    return host_ssh.is_destructive(cmd, _DESTRUCTIVE_PATTERNS)
 
 
 def audit_log(

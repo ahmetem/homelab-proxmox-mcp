@@ -49,6 +49,26 @@ def _digest(entry_without_hash: dict, key: Optional[bytes]) -> str:
     return hashlib.sha256(canon).hexdigest()
 
 
+def _lines(text: str) -> list[str]:
+    """Split on "\n" only. str.splitlines() also breaks on U+2028/U+2029/U+0085,
+    which json.dumps(ensure_ascii=False) leaves raw inside strings: an entry
+    whose cmd or output held one was cut in two (append chained to "", rewrite
+    split the line). A trailing "\r" (CRLF legacy line) is dropped as before."""
+    lines = [ln.removesuffix("\r") for ln in text.split("\n")]
+    if lines and lines[-1] == "":
+        lines.pop()
+    return lines
+
+
+def _dumps_line(obj: dict) -> str:
+    """One on-disk line. The three separators json leaves raw are escaped so
+    other line readers can't split it either; json.loads restores the same
+    string, so the hash (taken over the unescaped canonical form) is unchanged."""
+    return (json.dumps(obj, ensure_ascii=False)
+            .replace("\u2028", "\\u2028").replace("\u2029", "\\u2029")
+            .replace("\x85", "\\u0085"))
+
+
 def _last_hash(path: Path) -> str:
     """Hash of the most recent chained entry, or '' if the file is absent,
     empty, or ends in a legacy/unparseable line. Reads only the file tail."""
@@ -65,7 +85,7 @@ def _last_hash(path: Path) -> str:
         return ""
     except Exception:
         return ""
-    for line in reversed(data.splitlines()):
+    for line in reversed(_lines(data)):
         line = line.strip()
         if not line:
             continue
@@ -145,7 +165,7 @@ def append(path: Path, entry: dict) -> None:
             _heal_mode(fd)
             base["prev"] = _last_hash(path)
             base["hash"] = _digest(base, _key())
-            os.write(fd, (json.dumps(base, ensure_ascii=False) + "\n").encode("utf-8"))
+            os.write(fd, (_dumps_line(base) + "\n").encode("utf-8"))
             _unlock(fd, locked)
         finally:
             os.close(fd)  # also releases the POSIX flock
@@ -303,7 +323,7 @@ def rewrite_redacted(path: Path, note: str = "", force: bool = False) -> dict:
     st = Counter()
 
     def redact_lines(data: bytes) -> None:
-        for line in data.decode("utf-8", "replace").splitlines():
+        for line in _lines(data.decode("utf-8", "replace")):
             try:
                 obj = json.loads(line) if line.strip() else None
             except ValueError:
@@ -329,7 +349,7 @@ def rewrite_redacted(path: Path, note: str = "", force: bool = False) -> dict:
                     new_of[old] = red["hash"]
             if red != obj:
                 st["changed"] += 1
-                out_lines.append(json.dumps(red, ensure_ascii=False))
+                out_lines.append(_dumps_line(red))
             else:
                 out_lines.append(line)
 

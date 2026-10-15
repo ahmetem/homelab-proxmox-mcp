@@ -14,6 +14,7 @@ Connection details come from the existing PROXMOX_SSH_* env vars in .env.
 """
 from __future__ import annotations
 
+import base64
 import datetime as _dt
 import os
 import re
@@ -73,12 +74,63 @@ class HostSshError(Exception):
         self.stderr = stderr
 
 
-def is_destructive(cmd: str) -> Optional[str]:
-    """Return the matching destructive pattern (as a string) or None."""
-    for pat in _DESTRUCTIVE_PATTERNS:
+# Wrappers that run content the patterns above can't see: a decoder, eval,
+# a pipe into a shell, a substituted or process-substituted script. Fail
+# closed: they need the ack whatever the payload holds (`base64 -d | sh` of a
+# harmless line too). Shared with vm_ssh.
+# kisayol: shell wrappers only. Ceiling: quote-split words (`r''m -rf`),
+# `| python3 -`, hex/printf escapes into a file run later, a payload built
+# from variables still pass. Upgrade path: parse with a real shell lexer
+# (bashlex) and check the normalised words, or an allow-list like host_read.
+_OPAQUE_PATTERNS = [
+    re.compile(r"\bbase(64|32)\b[^|;&\n]*\s-(-decode|[a-zA-Z]*[dD])\b"),
+    re.compile(r"\bopenssl\s+(enc|base64)\b[^|;&\n]*\s-d\b"),
+    re.compile(r"\bxxd\b[^|;&\n]*\s-[a-z]*r"),
+    re.compile(r"\b(b64decode|uudecode)\b"),
+    # eval as a command; after a quote (`sh -c 'eval "$x"'`) only with an
+    # expandable argument, so `grep -E 'prompt eval|eval time'` stays clear.
+    re.compile(r"(^|[;&(`{\n]|\b(then|do|else)\s)\s*eval\b"),
+    re.compile(r"['\"]\s*eval\s+[\"'$`]"),
+    re.compile(r"\|\s*(sudo\s+(-\S+\s+)*)?(\S*/)?(ba|da|z|k)?sh\b"),
+    re.compile(r"\b(ba|da|z|k)?sh\s+-c\s+[\"']?(\$\(|`)"),
+    re.compile(r"(\b(source|(ba|da|z|k)?sh)|(^|[;&|\s])\.)\s+<\("),
+]
+
+# Base64 literals long enough to hide a command; decoded and scanned so a
+# destructive payload is named in the refusal, not just "opaque".
+_B64_TOKEN = re.compile(r"[A-Za-z0-9+/]{16,}={0,2}")
+
+
+def _decoded_texts(cmd: str):
+    for tok in _B64_TOKEN.findall(cmd):
+        try:
+            text = base64.b64decode(tok + "=" * (-len(tok) % 4), validate=True).decode("utf-8")
+        except ValueError:  # binascii.Error and UnicodeDecodeError both are
+            continue
+        if text and all(c.isprintable() or c.isspace() for c in text):
+            yield text
+
+
+def is_destructive(cmd: str, patterns: Optional[list] = None, _depth: int = 0) -> Optional[str]:
+    """Return the matching destructive pattern (as a string) or None.
+
+    `patterns` defaults to the host list (vm_ssh passes its own). Base64
+    payloads in the command are decoded and checked too, then the opaque
+    wrappers: those match even when the payload looks harmless."""
+    for pat in patterns if patterns is not None else _DESTRUCTIVE_PATTERNS:
         m = pat.search(cmd)
         if m:
             return m.group(0)
+    if _depth < 3:
+        for text in _decoded_texts(cmd):
+            hit = is_destructive(text, patterns, _depth + 1)
+            if hit:
+                return f"{hit} (inside a base64 payload)"
+    for pat in _OPAQUE_PATTERNS:
+        m = pat.search(cmd)
+        if m:
+            return (f"{m.group(0).strip()} (decoded/eval/piped-to-shell content "
+                    "is not inspectable)")
     return None
 
 

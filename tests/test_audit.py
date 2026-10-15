@@ -208,6 +208,41 @@ def test_rewrite_refuses_wrong_key_even_forced():
         os.environ.pop("PROXMOX_AUDIT_HMAC_KEY", None)
 
 
+_SEPS = "  \x85"  # json.dumps(ensure_ascii=False) leaves these raw
+
+
+def test_line_separator_in_entry_keeps_chain():
+    """madde 284: splitlines() cut an entry holding U+2028 in two, so the next
+    append chained to "" and verify broke on it."""
+    os.environ.pop("PROXMOX_AUDIT_HMAC_KEY", None)
+    p = _tmp()
+    for c in ("echo a b", "x y\x85z", "ls"):
+        audit.append(p, {"ts": c, "cmd": c, "rc": 0, "stdout_preview": c})
+    raw = p.read_text(encoding="utf-8")
+    assert not any(s in raw for s in _SEPS)            # escaped on disk
+    r = audit.verify_chain(p)
+    assert r["ok"] and r["chained"] == 3, r
+    assert audit.read_entries(p)[0]["cmd"] == "echo a b"
+
+
+def test_raw_separator_lines_from_old_writer_still_chain_and_rewrite():
+    """Logs written before the fix hold the separators raw: their hashes must
+    still verify, the next append must chain to them, rewrite must not split."""
+    os.environ.pop("PROXMOX_AUDIT_HMAC_KEY", None)
+    p = _tmp()
+    rows = _polluted(p, cmds=("whoami", "echo a b", "cat .env"))
+    p.write_text("".join(json.dumps(e, ensure_ascii=False) + "\n" for e in rows),
+                 encoding="utf-8")                      # the pre-fix writer
+    assert " " in p.read_text(encoding="utf-8")
+    assert audit._last_hash(p) == rows[-1]["hash"]
+    audit.append(p, {"ts": "t", "cmd": "after  ", "rc": 0})
+    v = audit.verify_chain(p)
+    assert v["ok"] and v["chained"] == 4, v
+    r = audit.rewrite_redacted(p)
+    assert r["lines"] == 4 and r["unparseable"] == 0 and r["redacted"] == 1, r
+    assert r["verify"]["ok"] and r["verify"]["chained"] == 5, r
+
+
 def _run_standalone():
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     failed = 0

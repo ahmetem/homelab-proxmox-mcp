@@ -66,7 +66,10 @@ class LxcExecInput(BaseModel):
         description=(
             "Required only when the command matches a destructive pattern "
             "(rm -rf, mkfs, dd of=/dev/..., shutdown, etc.) - checked "
-            "against the inner command, NOT the `pct exec` wrapper."
+            "against the inner command, NOT the `pct exec` wrapper. "
+            "Also required for wrappers whose content this check cannot "
+            "see (base64/xxd decode, eval, piping into a shell, "
+            "sh -c \"$(...)\"); base64 literals are decoded and checked."
         ),
     )
     reason: Optional[str] = Field(default=None, max_length=200)
