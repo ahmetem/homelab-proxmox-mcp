@@ -5,6 +5,49 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.2] - 2026-10-15
+
+### Security
+- `eval` and a pipe into a shell are now caught at every command position,
+  not only after `;`, `&`, `(`, a backtick, `{` or `then`/`do`/`else`.
+  `false || eval "$X"`, `echo x | eval "$(cat)"` and `! eval "$X"` ran
+  without `i_understand_data_loss` (madde 295). The opaque checks no longer
+  run as regexes over the raw text. A small shell scanner splits the command
+  into simple commands on unquoted `; & | || && ( ) \n` and backticks,
+  strips quotes and escapes, and follows `$(…)`/`<(…)` (inside double quotes
+  too), `<shell> … -c '<script>'` (also via `find -exec`, `xargs`, `su`,
+  `runuser`), `ssh host <cmd>` and `pct exec`/`qm`/`lxc-attach … -- <cmd>`.
+  `_head()` is the single definition of a command's head. It skips keywords
+  (`if then do else elif while until ! { }`), `VAR=` assignments and wrapper
+  chains with their options (`sudo -u x`, `env -i`, `xargs -0`, `timeout 5`,
+  `nice -n`, `nohup`, `exec`, `command`, `time`, `setsid`, `stdbuf`,
+  `chroot`). Every opaque check uses that head: `eval`, decoders, pipe to a
+  shell, `sh -c "$…"` and `<(…)`.
+- Newly caught: `| python3 -`, `| perl` and other interpreters reading their
+  program from stdin; `| env bash` and other wrapped shells; `bash -c "$X"`;
+  quote-split words (`r''m -rf`, `e'v'al`). The destructive patterns also run
+  on the quote-stripped words. Nesting deeper than 20 substitutions is
+  refused as not inspectable (fail-closed, no `RecursionError`).
+- Narrowed (loosening, madde 291.3): `b64decode`/`uudecode` and other decode
+  calls (`decodebytes`, `a2b_base64`, `decode_base64`, `decode64`) gate only
+  when they are a command head or when an interpreter (`python`, `perl`,
+  `ruby`, `node`, `php`) is a command head (`python3 -c "…b64decode…"`,
+  `python3 - <<EOF`). A source search like `grep -rn b64decode /opt/x` now
+  passes, including in the `proxmox_host_read_exec` backstop. So do
+  `grep -rn "base64 -d" src` and other quoted mentions.
+- Replay over the AHMETPC host and VM logs (8 035 commands, the `cmd` field
+  is redacted and cut at 500 chars) gives identical decisions under 1.8.1 and
+  1.8.2: 117 flagged by both, 0 newly flagged, 0 newly passing.
+- Ceiling (the `kisayol:` comment in `host_ssh.py`): payloads built from
+  variables or `$'\x72m'`/printf escapes, `env -S`, script strings handed to
+  commands the scanner doesn't follow (`trap`, `parallel`; quote-eval remains
+  as a backstop), `| su user`, interpreter flags taken as "program given"
+  (`| python3 -E`).
+
+### Changed
+- `.gitignore` covers `*.kirik`, the audit log archives that 290.2 left
+  untracked (`?? _host_ssh_audit.log.2026-10-15.kirik` on CT 207).
+
 ## [1.8.1] - 2026-10-15
 
 ### Security

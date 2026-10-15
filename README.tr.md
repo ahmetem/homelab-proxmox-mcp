@@ -128,14 +128,14 @@ bölümündeki SSH ayarlarını gerektirir.
 | Araç | Açıklama |
 |---|---|
 | `proxmox_vm_list_hosts` | `vm_ssh_hosts.json`'da kayıtlı guest VM alias'larını listeler (salt-okunur) |
-| `proxmox_vm_exec` | Kayıtlı bir guest VM'de SSH üzerinden shell komutu çalıştırır (`vm_ssh_hosts.json` kullanır). `confirm=true` gerektirir. Yıkıcı pattern'lere uyan komutlar ayrıca `i_understand_data_loss=true` ister; içeriği kontrolün göremediği sarmalayıcılar da (base64/xxd decode, `eval`, `| sh`, `sh -c "$(...)"`) öyle — komuttaki base64 literal'leri çözülüp kontrol edilir. |
+| `proxmox_vm_exec` | Kayıtlı bir guest VM'de SSH üzerinden shell komutu çalıştırır (`vm_ssh_hosts.json` kullanır). `confirm=true` gerektirir. Yıkıcı pattern'lere uyan komutlar ayrıca `i_understand_data_loss=true` ister; içeriği kontrolün göremediği sarmalayıcılar da (base64/xxd decode, herhangi bir komut konumunda — `\|`, `\|\|`, `!`, `then`, `$(`, `sudo`/`env`/`xargs` sonrası — `eval` ya da shell/yorumlayıcıya pipe, `sh -c "$X"`) öyle — tırnaklar soyulur, `$(…)` ve `sh -c`/`ssh`/`pct exec --` betikleri izlenir, komuttaki base64 literal'leri çözülüp kontrol edilir. |
 | `proxmox_vm_read_file` | Kayıtlı bir guest VM'den SSH ile dosya okur (salt-okunur) |
 
 ### Proxmox host SSH (full shell, audit-logged)
 
 | Araç | Açıklama |
 |---|---|
-| `proxmox_host_exec` | Proxmox host'ta SSH üzerinden serbest shell komutu çalıştırır. `confirm=true` gerektirir. Yıkıcı pattern'lere uyan komutlar ayrıca `i_understand_data_loss=true` ister; içeriği kontrolün göremediği sarmalayıcılar da (base64/xxd decode, `eval`, `| sh`, `sh -c "$(...)"`) öyle — komuttaki base64 literal'leri çözülüp kontrol edilir. Her çağrı `_host_ssh_audit.log`'a yazılır. |
+| `proxmox_host_exec` | Proxmox host'ta SSH üzerinden serbest shell komutu çalıştırır. `confirm=true` gerektirir. Yıkıcı pattern'lere uyan komutlar ayrıca `i_understand_data_loss=true` ister; içeriği kontrolün göremediği sarmalayıcılar da (base64/xxd decode, herhangi bir komut konumunda — `\|`, `\|\|`, `!`, `then`, `$(`, `sudo`/`env`/`xargs` sonrası — `eval` ya da shell/yorumlayıcıya pipe, `sh -c "$X"`) öyle — tırnaklar soyulur, `$(…)` ve `sh -c`/`ssh`/`pct exec --` betikleri izlenir, komuttaki base64 literal'leri çözülüp kontrol edilir. Her çağrı `_host_ssh_audit.log`'a yazılır. |
 | `proxmox_host_read_exec` | Proxmox host'ta tek bir **salt-okuma**, allowlist'li komut çalıştırır. Geniş tanılama kapsamı: dosya/metin (`cat`, `tail`, `grep`, `zcat`, …), depolama (`lsblk`, `pvs`/`lvs`/`vgs`, `zpool status`, `zfs list`, `zdb`, `smartctl`, `nvme <read>`, `proxmox-boot-tool status`), donanım (`lspci`, `lsusb`, `lshw`, `dmidecode`, `dmesg`), süreç/ağ (`ps`, `ss`, `lsof`, `ip`), servisler (`systemctl status/…`, `journalctl`, `coredumpctl list/info`), Proxmox (`pveversion`, `pct`/`qm config`, `pvesm`, `pvesh get`), paketler (`dpkg-query`, `apt list`, `apt-cache`). `confirm` gerekmez — shell metakarakterlerini, allowlist-dışı binary'leri, mutasyon alt-komutlarını ve yazma/durum/askı bayraklarını (`dmesg -C`, `dmidecode --dump-bin`, `tail -f`, …) reddeder. Salt-okuma ajanlara güvenle verilebilir. |
 
 ### Audit-log bütünlüğü
@@ -148,7 +148,7 @@ bölümündeki SSH ayarlarını gerektirir.
 
 | Araç | Açıklama |
 |---|---|
-| `proxmox_lxc_exec` | Proxmox host'tan `pct exec` ile bir LXC container içinde shell komutu çalıştırır. CT içinde SSH gerektirmez. `confirm=true` gerektirir. Yıkıcı pattern'lere uyan komutlar ayrıca `i_understand_data_loss=true` ister; içeriği kontrolün göremediği sarmalayıcılar da (base64/xxd decode, `eval`, `| sh`, `sh -c "$(...)"`) öyle — komuttaki base64 literal'leri çözülüp kontrol edilir. |
+| `proxmox_lxc_exec` | Proxmox host'tan `pct exec` ile bir LXC container içinde shell komutu çalıştırır. CT içinde SSH gerektirmez. `confirm=true` gerektirir. Yıkıcı pattern'lere uyan komutlar ayrıca `i_understand_data_loss=true` ister; içeriği kontrolün göremediği sarmalayıcılar da (base64/xxd decode, herhangi bir komut konumunda — `\|`, `\|\|`, `!`, `then`, `$(`, `sudo`/`env`/`xargs` sonrası — `eval` ya da shell/yorumlayıcıya pipe, `sh -c "$X"`) öyle — tırnaklar soyulur, `$(…)` ve `sh -c`/`ssh`/`pct exec --` betikleri izlenir, komuttaki base64 literal'leri çözülüp kontrol edilir. |
 | `proxmox_ct_service_action` | `proxmox_lxc_exec` üzerine typed kısayol: bir CT içinde `systemctl --no-pager <action> <service>`. Salt-okunur action'lar (status, is-active, is-enabled, show) `confirm` istemez; durum değiştirenler (start, stop, restart, reload, enable, disable, mask, unmask) `confirm=true` gerektirir. |
 | `proxmox_ct_log_tail` | Bir CT içinden journald unit veya log dosyası tail eden salt-okunur araç. İki mod: `service` (journalctl -u) ve `file` (tail -n). Opsiyonel `grep` server-side filter. |
 

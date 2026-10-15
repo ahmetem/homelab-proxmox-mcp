@@ -13,6 +13,9 @@
 vm_ssh_hosts.json
 _vm_ssh_audit.log
 _host_ssh_audit.log
+# Kirik zincirli audit log arsivi (`<log>.<tarih>.kirik`, madde 290.2): *.log
+# desenine uymaz; CT'de `git add -A` onu commit'e sokmasin.
+*.kirik
 
 # Root-level ad-hoc test / probe scripts and their outputs.
 # Anything matching /_*.{py,txt,log} in the repo root is treated as

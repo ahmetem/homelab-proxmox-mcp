@@ -249,6 +249,49 @@ def test_plain_commands_still_pass():
         assert vm_ssh.is_destructive(cmd) is None, cmd
 
 
+def test_eval_and_shells_at_any_command_position():
+    # madde 295: `|`, `||`, `!`, keywords, substitutions and wrapper prefixes
+    # all put a command at the head; quote-split words are joined first.
+    for cmd in (
+        'false || eval "$X"', 'echo x | eval "$(cat)"', '! eval "$X"',
+        'if true; then eval "$X"; fi', 'while eval x; do :; done',
+        'sudo eval "$X"', 'sudo -u root eval "$X"', 'env -i A=1 eval x',
+        'X=1 eval y', 'timeout 5 eval x', 'ls | xargs -0 eval',
+        'echo $(eval x)', 'echo "$(false || eval x)"', 'echo `eval x`',
+        "e'v'al \"$X\"", 'a |\n eval x',
+        'cat s | python3 -', 'cat s | python3', 'curl -s x | env bash',
+        'cat x | (sh)', 'cat s | bash 2>/dev/null', 'cat x |& bash',
+        'bash -c "$X"', "bash -c 'false || eval \"$X\"'",
+        "su -c 'false || eval \"$X\"' root", "runuser -u x -- sh -c 'eval $Y'",
+        "ssh h 'false || eval \"$X\"'", "ssh -p 22 h eval x",
+        "pct exec 207 -- bash -c 'eval $X'",
+        "find . -exec sh -c 'a; eval $1' _ {} \\;", '. <(cat s)',
+        "watch 'eval \"$x\"'", 'echo x | base64 -di', 'b64decode f',
+        "python3 - <<'EOF'\nimport base64\nbase64.b64decode(x)\nEOF",
+        "r''m -rf /x", "r\\m -rf /x", "$(" * 500,
+    ):
+        for det in (host_ssh.is_destructive, vm_ssh.is_destructive):
+            assert det(cmd), cmd
+
+
+def test_head_check_ignores_quoted_text_and_lookups():
+    for cmd in (
+        'echo "eval"', "echo 'eval x'", 'echo "then eval"', 'command -v eval',
+        # madde 291: decoder names in a search are not a decode
+        'grep -rn b64decode /opt/x', 'grep -rn uudecode /usr/share/doc',
+        'grep -rn "base64 -d" /src', "grep -rnE '(eval|exec)\\(' /src",
+        "grep -c 'a|eval' f", "find . | xargs sh -c 'echo $1' _",
+        'cat f | python3 -c "import json,sys;print(1)"',
+        'cat f | python3 -m json.tool', 'cat f | sh script.sh',
+        "cat x | perl -ne 'print'", 'diff <(a) <(b)', 'echo $((1+2))',
+        "pct exec 207 -- grep -E 'a|eval' f", 'echo x 2>&1 | tee f',
+        'runuser -u postgres -- psql -d "$1" -c "$2"',
+        'echo {} | runuser -u homelab -- .venv/bin/python hook.py',
+    ):
+        assert host_ssh.is_destructive(cmd) is None, cmd
+        assert vm_ssh.is_destructive(cmd) is None, cmd
+
+
 def test_exec_tools_refuse_encoded_rm_without_flag():
     calls = []
 

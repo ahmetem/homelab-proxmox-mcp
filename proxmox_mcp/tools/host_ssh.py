@@ -49,8 +49,9 @@ class HostExecInput(BaseModel):
             "Required only when the command matches a destructive pattern "
             "(rm -rf, mkfs, dd of=/dev/..., zpool destroy, qm destroy, etc.). "
             "Also required for wrappers whose content this check cannot "
-            "see (base64/xxd decode, eval, piping into a shell, "
-            "sh -c \"$(...)\"); base64 literals are decoded and checked."
+            "see (base64/xxd decode, eval or a pipe into a shell or "
+            "interpreter at any command position, sh -c \"$X\"); base64 "
+            "literals are decoded and checked."
         ),
     )
     reason: Optional[str] = Field(default=None, max_length=200)
