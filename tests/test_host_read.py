@@ -163,6 +163,67 @@ def test_rejects_new_mutating_and_write_flags():
     _no("vgreduce pve /dev/sdc3")
 
 
+def test_madde_312_mutation_forms_refused():
+    # sys-304 measured these passing the read-only gate (all mutate or write)
+    for cmd in (
+        "ip link set vmbr0 down", "ip -s link set vmbr0 down", "ip addr add 10.0.0.9/24 dev vmbr0",
+        "ip route flush all", "ip neigh flush all", "date -s '2020-01-01'",
+        "date --set=2020-01-01", "hostname evil", "hostname -F /etc/passwd",
+        "tree -o /etc/passwd /", "ss -K dst 192.168.1.1", "arcstat -o /etc/passwd 1 1",
+        "smartctl -s off /dev/sda", "smartctl --smart=off /dev/sda",
+        "nvme telemetry-log /dev/nvme0 --output-file=/etc/passwd",
+        "journalctl --setup-keys", "journalctl --update-catalog", "sensors -s",
+        "lshw -dump /etc/passwd", "file -C -m /etc/passwd", "apt-cache gencaches",
+        "pct exec 200 -- ip link set eth0 down", "zdb -e -F nvmepool",
+    ):
+        _no(cmd)
+
+
+def test_option_level_fail_closed():
+    for cmd in (
+        "ip link s vmbr0 down", "ip -b /tmp/cmds", "ip -force -batch /tmp/x", "ip netns exec x id",
+        "ip netns add x", "ip rule del pref 100", "ip address del 1.2.3.4/24 dev x",
+        "date 010100002020", "date --se 2020-01-01", "hostname -b x", "tree -R -H . /",
+        "ss --kill", "ss -D /tmp/x", "smartctl -o on /dev/sda", "smartctl -S on /dev/sda",
+        "smartctl -X /dev/sda", "smartctl -l scterc,70,70 /dev/sda", "smartctl --set=standby,now /dev/sda",
+        "journalctl --cursor-file=/tmp/c", "journalctl --relinquish-var", "journalctl --sync",
+        "journalctl -n --setup-keys", "file -p /etc/hosts", "apt-cache -p /etc/passwd show x",
+        "apt-cache -o Dir::Cache=/tmp show x", "zdb -U /etc/zfs/x nvmepool", "zdb -x /tmp nvmepool",
+        "systemctl --state status stop pveproxy", "systemctl -H status stop x",
+        "coredumpctl -o /etc/passwd info 1", "nvme get-log /dev/nvme0 -O /tmp/x",
+        "lshw -short -dump /tmp/x",
+    ):
+        _no(cmd)
+
+
+def test_normal_reads_still_pass():
+    # madde 312 false-positive check: everyday read forms
+    for cmd in (
+        "ip -br a", "ip -br link", "ip a", "ip addr show vmbr0", "ip -4 -o addr show",
+        "ip route", "ip route show table all", "ip route get 1.1.1.1", "ip -s link show eno1",
+        "ip neigh", "ip -j -p addr", "ip rule list", "ip -c=never a", "ip -n x link",
+        "ss -tlnp", "ss -tunap", "ss -s", "ss -lntp sport = :22", "ss --tcp --listening --numeric",
+        "journalctl -u pveproxy -n 50 --no-pager", "journalctl -b -1 -p err --no-pager",
+        "journalctl -n50 -o cat -u x", "journalctl --since '1 hour ago' --until now -u x",
+        "journalctl -k -b", "journalctl --disk-usage", "journalctl --list-boots",
+        "journalctl -u x --since=today -g error", "journalctl -t CRON -r -n 20",
+        "smartctl -a /dev/sda", "smartctl -x /dev/nvme0", "smartctl -H /dev/sdb",
+        "smartctl -i -d sat /dev/sda", "smartctl -l selftest /dev/sda", "smartctl --scan",
+        "smartctl -j -a /dev/sda", "smartctl --all --json=c /dev/sda",
+        "date", "date -u", "date +%s", "date -I", "date -Iseconds", "date -d @0", "date -R",
+        "hostname", "hostname -f", "hostname -I", "hostname --fqdn",
+        "tree -L 2 /etc/pve", "tree -a -d /opt", "arcstat 1 3", "arcstat -f time,hit% 1 1",
+        "sensors", "sensors -j", "lshw -short", "lshw -class disk -json", "file /etc/hosts",
+        "file -L -b /usr/bin/python3", "apt-cache policy pve-manager", "apt-cache show zfsutils-linux",
+        "apt-cache search --names-only zfs", "zdb -C nvmepool", "zdb -l /dev/sda1",
+        "systemctl --no-pager status pveproxy", "systemctl list-units --type=service --state=failed",
+        "systemctl --failed", "chronyc -n sources", "coredumpctl --no-pager list",
+        "nvme smart-log /dev/nvme0 -o json", "pct exec 200 -- ip -br a",
+        "pct exec 209 -- journalctl -u homelab-agent-ha -n 50 --no-pager",
+    ):
+        _ok(cmd)
+
+
 def test_rejects_empty():
     _no("")
     _no("   ")

@@ -5,6 +5,48 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.4] - 2026-10-15
+
+### Security
+- `proxmox_host_read_exec` (granted to read-only agents) ran mutating forms
+  of allow-listed binaries (madde 312, measured by sys-304). Examples:
+  - `ip link set vmbr0 down` / `ip -s link set …` / `ip addr add` /
+    `ip route flush all` / `ip neigh flush`: the "subcommand" check took the
+    object (`link`) for the action;
+  - `date -s`/`--set=`, `hostname evil`/`-F`;
+  - `tree -o /etc/passwd`, `arcstat -o`, `lshw -dump`, `file -C`,
+    `nvme telemetry-log --output-file=` (write a file);
+  - `ss -K`, `smartctl -s off`/`--smart=off`, `sensors -s`;
+  - `journalctl --setup-keys`/`--update-catalog`, `apt-cache gencaches`,
+    `zdb -e -F`;
+  - and all of them through `pct exec <vmid> -- …`.
+- Now fail-closed at the option level. The binaries that can also write or
+  change state (date, hostname, tree, ss, arcstat, smartctl, journalctl,
+  sensors, lshw, file, apt-cache, zdb) accept only options listed as read
+  forms in `_OPTS`, from their `--help`/man pages. Clusters (`-ia`), attached
+  values (`-n50`, `-Iseconds`), `--opt=value` and journalctl's optional
+  values (`-n 50`, `-b -1`) are parsed; unknown options and GNU
+  abbreviations (`date --se`) are refused. Operand checks: `date` only
+  `+FORMAT`, `hostname` none, `smartctl -l scterc,…` (sets a timer) refused.
+- `ip` is parsed on its own: `ip [read options] OBJECT [show|list|ls|lst]`,
+  plus `get` for route/neigh. Every other action is refused, and so are
+  `-b/-batch`, `-force` and `netns exec`. Only exact words count, because
+  ip takes prefixes and `ip link s` is `set`.
+- Subcommand-restricted binaries refuse an option before the subcommand
+  unless it is a known value-less flag or an attached `--opt=value`.
+  `systemctl --state status stop pveproxy` passed: `--state` swallowed
+  `status`, and `stop` ran.
+- `telemetry-log` was dropped from the nvme read subcommands, and so was
+  `gencaches` from apt-cache (now subcommand-restricted). nvme `-O/--output-file`
+  and coredumpctl `-o/--output` are denied. `systemctl` with no verb
+  (`systemctl --failed`) is `list-units` and passes.
+- False positives: all 726 unique `proxmox_host_read_exec` commands from the
+  Claude Code transcripts were replayed. None newly refused; 2 now pass
+  (`systemctl --failed`). `test_normal_reads_still_pass` covers ~70 everyday
+  read forms (`ip -br a`, `ss -tlnp`, `journalctl -u x -n 50`,
+  `smartctl -a`, `date +%s`, `hostname -I`, `lshw -short`, …).
+- The refusal for a bad subcommand printed `'.strip()` literally; fixed.
+
 ## [1.8.3] - 2026-10-15
 
 ### Security
