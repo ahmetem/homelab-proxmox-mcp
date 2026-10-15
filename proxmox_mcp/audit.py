@@ -251,16 +251,27 @@ def _write_all(fd: int, data: bytes) -> None:
         view = view[os.write(fd, view):]
 
 
-def rewrite_redacted(path: Path, note: str = "") -> dict:
+def rewrite_redacted(path: Path, note: str = "", force: bool = False) -> dict:
     """Redact secrets already sitting in `path` and rebuild the hash chain.
 
     One-off maintenance for logs written before redaction existed. Every line
     keeps its position and fields; string fields go through the same redactor
     as append(). Chained lines get a recomputed `hash`, and each `prev` is
     mapped from the old hash to the new one, so an intact chain stays intact
-    and a pre-existing break stays visible. Legacy lines stay unchained. When
-    anything changed, a marker entry carrying `note` is appended. The redaction
-    is not undoable: the original bytes are not kept anywhere.
+    and a pre-existing `prev` break stays visible. Legacy lines stay unchained.
+    When anything changed, a marker entry carrying `note` is appended. The
+    redaction is not undoable: the original bytes are not kept anywhere.
+
+    A line whose stored `hash` doesn't match its content (tampered, or written
+    under another key) is never re-signed: re-hashing it would launder the
+    edit. By default such a line makes the call refuse, writing nothing — the
+    operator decides, e.g. archives the log as `<log>.<date>.kirik` and lets a
+    fresh chain start. With `force=True` the rest is rewritten and those lines
+    are only masked, keeping their stored `hash` and `prev`, so verify_chain
+    still breaks on the same line; they are listed in `mismatched` and the
+    marker note. If no chained line verifies at all, the key is wrong or
+    missing (PROXMOX_AUDIT_HMAC_KEY not loaded): that refuses even with
+    `force`, since it would strip the HMAC off a whole log.
 
     Concurrent appends are never lost. The slow redaction pass runs unlocked
     (a 6 MB log takes ~10 s, the Windows append lock gives up after ~10 s);
@@ -276,8 +287,9 @@ def rewrite_redacted(path: Path, note: str = "") -> dict:
     unlocked readers: a verify_chain overlapping it may report a transient
     break that is gone on retry.
 
-    Returns {lines, redacted, rewritten, unparseable, counts: {label: n}, verify}.
-    Raises if the lock can't be had or the log shrank under it (rotated?).
+    Returns {lines, redacted, rewritten, unparseable, mismatched: [line no],
+    counts: {label: n}, verify}. Raises if the lock can't be had, the log
+    shrank under it (rotated?), or on hash mismatches as above.
     """
     tmp = path.with_name(path.name + ".redact-tmp")
     if tmp.exists():  # O_TRUNC below would wipe the only complete copy
@@ -287,6 +299,7 @@ def rewrite_redacted(path: Path, note: str = "") -> dict:
     key = _key()
     new_of: dict[str, str] = {}
     out_lines: list[str] = []
+    mismatched: list[int] = []
     st = Counter()
 
     def redact_lines(data: bytes) -> None:
@@ -306,10 +319,14 @@ def rewrite_redacted(path: Path, note: str = "") -> dict:
                 st["redacted"] += 1
             if "hash" in obj:
                 old = obj["hash"]
-                red["prev"] = new_of.get(obj.get("prev") or "", obj.get("prev") or "")
-                red.pop("hash")
-                red["hash"] = _digest(red, key)
-                new_of[old] = red["hash"]
+                st["chained"] += 1
+                if _digest({k: v for k, v in obj.items() if k != "hash"}, key) != old:
+                    mismatched.append(len(out_lines) + 1)  # keeps stored hash/prev: never re-signed
+                else:
+                    red["prev"] = new_of.get(obj.get("prev") or "", obj.get("prev") or "")
+                    red.pop("hash")
+                    red["hash"] = _digest(red, key)
+                    new_of[old] = red["hash"]
             if red != obj:
                 st["changed"] += 1
                 out_lines.append(json.dumps(red, ensure_ascii=False))
@@ -329,6 +346,14 @@ def rewrite_redacted(path: Path, note: str = "") -> dict:
             if not raw.startswith(done):
                 raise RuntimeError("log shrank or changed during rewrite (rotated?); nothing written")
             redact_lines(raw[len(done):])
+            if mismatched and len(mismatched) == st["chained"]:
+                raise RuntimeError(f"none of {st['chained']} chained lines verifies: "
+                                   "PROXMOX_AUDIT_HMAC_KEY wrong or not loaded; nothing written")
+            if mismatched and not force:
+                raise RuntimeError(f"{len(mismatched)} line(s) fail their hash (tampered, or another key), "
+                                   f"first at line(s) {mismatched[:5]}; nothing written. Archive the log "
+                                   "(<log>.<date>.kirik) or pass force=True to mask the rest and keep "
+                                   "those lines visibly broken")
             if st["changed"]:
                 data = ("\n".join(out_lines) + "\n").encode("utf-8")
                 tfd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_BINARY", 0), 0o600)
@@ -349,10 +374,14 @@ def rewrite_redacted(path: Path, note: str = "") -> dict:
     changed, redacted = st["changed"], st["redacted"]
     if not changed:
         return {"lines": len(out_lines), "redacted": 0, "rewritten": 0,
-                "unparseable": st["unparseable"], "counts": {}, "verify": verify_chain(path)}
+                "unparseable": st["unparseable"], "mismatched": mismatched, "counts": {},
+                "verify": verify_chain(path)}
     passes = sum(counts.values())
+    kept = (f"; {len(mismatched)} hash-mismatch line(s) kept broken, not re-signed: {mismatched[:20]}"
+            if mismatched else "")
     append(path, {"ts": _dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "rc": None, "cmd": "",
                   "note": f"redaction rewrite: {redacted} lines masked ({passes} passes), "
-                          f"{changed} rewritten, chain rebuilt" + (f"; {note}" if note else "")})
+                          f"{changed} rewritten, chain rebuilt" + kept + (f"; {note}" if note else "")})
     return {"lines": len(out_lines), "redacted": redacted, "rewritten": changed,
-            "unparseable": st["unparseable"], "counts": dict(counts), "verify": verify_chain(path)}
+            "unparseable": st["unparseable"], "mismatched": mismatched, "counts": dict(counts),
+            "verify": verify_chain(path)}

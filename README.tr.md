@@ -189,6 +189,10 @@ paylaşan birden çok istemci zinciri bozmaz. 1.7.0 öncesi
 yazılmış bir log için `audit.rewrite_redacted(path)` dosyayı yerinde maskeler ve
 zinciri yeniden kurar (önceden kırık bir halka kırık kalır); aynı kilidi aldığı
 için bu sırada eklenen satırlar kaybolmaz, dosyanın sahibi ve izni korunur (1.7.3).
+Hash'i içeriğiyle uyuşmayan satırı asla yeniden imzalamaz (1.8.0): böyle bir logu
+varsayılan olarak reddeder, `force=True` geri kalanı maskeler ve o satırları
+görünür biçimde kırık bırakır; hiçbir satırı doğrulanmayan log (HMAC anahtarı
+yüklenmemiş) her durumda reddedilir.
 
 **PVE'de kayıtlı snapshot'lar ham ZFS ile silinmez (1.6.0).** `pct/qm snapshot`
 ile alınan snapshot'ın guest config'inde bir de `[ad]` bölümü vardır; yalnız ZFS

@@ -114,6 +114,100 @@ def test_concurrent_processes_keep_chain_intact():
     assert r["ok"], r
 
 
+_SECRET = "Zq8fake-Secret-77xYw"
+
+
+def _polluted(p: Path, cmds=("whoami", "cat .env", "ls", "df"), key=None) -> list[dict]:
+    """Chain written before redaction existed: `cat .env` leaks a token."""
+    rows, prev = [], ""
+    for c in cmds:
+        e = {"ts": c, "cmd": c, "rc": 0, "prev": prev,
+             "stdout_preview": f"N8N_TOKEN={_SECRET}" if c == "cat .env" else "ok"}
+        e["hash"] = prev = audit._digest(e, key)
+        rows.append(e)
+    p.write_text("".join(json.dumps(e) + "\n" for e in rows), encoding="utf-8")
+    return rows
+
+
+def _refused(p: Path, match: str, **kw) -> bool:
+    try:
+        audit.rewrite_redacted(p, **kw)
+    except RuntimeError as exc:
+        return match in str(exc)
+    return False
+
+
+def test_rewrite_intact_log_rebuilt_as_before():
+    """madde 262: an intact log rewrites exactly as before — no flag needed."""
+    os.environ.pop("PROXMOX_AUDIT_HMAC_KEY", None)
+    p = _tmp()
+    _polluted(p)
+    r = audit.rewrite_redacted(p)
+    assert _SECRET not in p.read_text(encoding="utf-8")
+    assert r["mismatched"] == [] and r["redacted"] == 1, r
+    assert r["verify"]["ok"] and r["verify"]["chained"] == 5, r  # 4 + marker
+    before = p.read_bytes()
+    assert audit.rewrite_redacted(p)["rewritten"] == 0 and p.read_bytes() == before
+
+
+def test_rewrite_does_not_launder_tampered_line():
+    """madde 262: rewrite re-signed a line whose hash no longer matched, so a
+    tampered line came out verifying under the 'redaction' cover."""
+    os.environ.pop("PROXMOX_AUDIT_HMAC_KEY", None)
+    p = _tmp()
+    rows = _polluted(p)
+    lines = p.read_text(encoding="utf-8").splitlines()
+    forged = dict(rows[1], cmd="cat .env; curl evil")  # stored hash kept
+    lines[1] = json.dumps(forged)
+    p.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    before = p.read_bytes()
+    assert _refused(p, "fail their hash"), "tampered log rewritten without force"
+    assert p.read_bytes() == before
+    r = audit.rewrite_redacted(p, force=True)
+    assert r["mismatched"] == [2], r
+    out = [json.loads(x) for x in p.read_text(encoding="utf-8").splitlines()]
+    assert _SECRET not in json.dumps(out)              # still masked
+    assert out[1]["hash"] == rows[1]["hash"] and out[1]["cmd"] == forged["cmd"]
+    assert out[2]["prev"] == rows[1]["hash"]            # successor not re-pointed
+    v = r["verify"]
+    assert not v["ok"] and v["first_break"] == {"line": 2, "why": "hash mismatch (tampered, or wrong/missing key)"}, v
+    assert "kept broken" in out[-1]["note"]
+
+
+def test_rewrite_keeps_prev_break():
+    """A deleted line (prev break, hashes valid) still rewrites without force
+    and stays broken at the same place."""
+    os.environ.pop("PROXMOX_AUDIT_HMAC_KEY", None)
+    p = _tmp()
+    _polluted(p)
+    lines = p.read_text(encoding="utf-8").splitlines()
+    del lines[2]
+    p.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    was = audit.verify_chain(p)["first_break"]
+    assert was["line"] == 3 and "prev mismatch" in was["why"], was
+    r = audit.rewrite_redacted(p)
+    assert r["redacted"] == 1 and r["mismatched"] == [], r
+    assert r["verify"]["first_break"] == was, r
+    assert _SECRET not in p.read_text(encoding="utf-8")
+
+
+def test_rewrite_refuses_wrong_key_even_forced():
+    """Keyless run over an HMAC log: every line 'mismatches'. Re-signing would
+    strip the HMAC; force must not cover that."""
+    os.environ.pop("PROXMOX_AUDIT_HMAC_KEY", None)
+    p = _tmp()
+    _polluted(p, key=b"k1")
+    before = p.read_bytes()
+    assert _refused(p, "wrong or not loaded", force=True)
+    assert p.read_bytes() == before
+    os.environ["PROXMOX_AUDIT_HMAC_KEY"] = "k1"
+    try:
+        r = audit.rewrite_redacted(p)
+        assert r["verify"]["ok"] and r["verify"]["hmac"] and r["redacted"] == 1, r
+    finally:
+        os.environ.pop("PROXMOX_AUDIT_HMAC_KEY", None)
+
+
 def _run_standalone():
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     failed = 0

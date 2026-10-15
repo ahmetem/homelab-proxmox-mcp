@@ -5,6 +5,31 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.0] - 2026-10-15
+
+### Security
+- `audit.rewrite_redacted()` no longer launders a tampered line. It used to
+  recompute the hash of every chained line, so a line edited after it was
+  written (stored `hash` no longer matching its content) came out of a
+  "redaction" rewrite verifying again; only `prev` breaks survived. A
+  hash-mismatch line is now never re-signed. By default the call refuses and
+  writes nothing, naming the first broken lines and pointing at the `.kirik`
+  archive convention (move the log aside as `<log>.<date>.kirik`, let a fresh
+  chain start). The new `force=True` rewrites the rest and only masks those
+  lines, keeping their stored `hash` and `prev`, so `verify_chain` still breaks
+  on the same line; the result's new `mismatched` list and the marker note
+  record them.
+- A keyless run over an HMAC log (`PROXMOX_AUDIT_HMAC_KEY` not loaded, or
+  wrong) made every line "mismatch" and the old rewrite re-signed the whole
+  log with plain SHA-256, silently stripping the HMAC. When no chained line
+  verifies the call now refuses, `force` or not.
+
+Refuse-by-default over always-mark: a mismatch can mean tampering or a wrong
+key, the rewrite is irreversible, and the safe reaction differs (archive vs.
+reload the key), so the operator decides. Intact logs and `prev` breaks are
+unaffected: an equivalence run over legacy + chained logs, with and without
+HMAC and with a deleted line, gave byte-identical output to 1.7.4.
+
 ## [1.7.4] - 2026-10-14
 
 ### Fixed

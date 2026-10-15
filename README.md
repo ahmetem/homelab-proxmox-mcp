@@ -230,6 +230,10 @@ clients sharing one log keep the chain intact. For a log written
 before 1.7.0, `audit.rewrite_redacted(path)` masks it in place and rebuilds the
 chain (an already-broken link stays broken); it takes the same lock, so lines
 appended meanwhile are kept, and the file keeps its owner and mode (1.7.3).
+It never re-signs a line whose hash doesn't match (1.8.0): by default it
+refuses such a log, `force=True` masks the rest and leaves those lines visibly
+broken, and a log where no line verifies (HMAC key not loaded) is refused
+either way.
 
 **Safety in action** — a destructive request is refused, previewed, then
 applied only after explicit consent, and stays on the audit trail:
