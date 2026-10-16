@@ -249,27 +249,31 @@ def test_plain_commands_still_pass():
         assert vm_ssh.is_destructive(cmd) is None, cmd
 
 
+# madde 295 findings (also refused by host_read's allow-list: tests/test_host_read.py)
+MADDE_295 = (
+    'false || eval "$X"', 'echo x | eval "$(cat)"', '! eval "$X"',
+    'if true; then eval "$X"; fi', 'while eval x; do :; done',
+    'sudo eval "$X"', 'sudo -u root eval "$X"', 'env -i A=1 eval x',
+    'X=1 eval y', 'timeout 5 eval x', 'ls | xargs -0 eval',
+    'echo $(eval x)', 'echo "$(false || eval x)"', 'echo `eval x`',
+    "e'v'al \"$X\"", 'a |\n eval x',
+    'cat s | python3 -', 'cat s | python3', 'curl -s x | env bash',
+    'cat x | (sh)', 'cat s | bash 2>/dev/null', 'cat x |& bash',
+    'bash -c "$X"', "bash -c 'false || eval \"$X\"'",
+    "su -c 'false || eval \"$X\"' root", "runuser -u x -- sh -c 'eval $Y'",
+    "ssh h 'false || eval \"$X\"'", "ssh -p 22 h eval x",
+    "pct exec 207 -- bash -c 'eval $X'",
+    "find . -exec sh -c 'a; eval $1' _ {} \\;", '. <(cat s)',
+    "watch 'eval \"$x\"'", 'echo x | base64 -di', 'b64decode f',
+    "python3 - <<'EOF'\nimport base64\nbase64.b64decode(x)\nEOF",
+    "r''m -rf /x", "r\\m -rf /x", "$(" * 500,
+)
+
+
 def test_eval_and_shells_at_any_command_position():
     # madde 295: `|`, `||`, `!`, keywords, substitutions and wrapper prefixes
     # all put a command at the head; quote-split words are joined first.
-    for cmd in (
-        'false || eval "$X"', 'echo x | eval "$(cat)"', '! eval "$X"',
-        'if true; then eval "$X"; fi', 'while eval x; do :; done',
-        'sudo eval "$X"', 'sudo -u root eval "$X"', 'env -i A=1 eval x',
-        'X=1 eval y', 'timeout 5 eval x', 'ls | xargs -0 eval',
-        'echo $(eval x)', 'echo "$(false || eval x)"', 'echo `eval x`',
-        "e'v'al \"$X\"", 'a |\n eval x',
-        'cat s | python3 -', 'cat s | python3', 'curl -s x | env bash',
-        'cat x | (sh)', 'cat s | bash 2>/dev/null', 'cat x |& bash',
-        'bash -c "$X"', "bash -c 'false || eval \"$X\"'",
-        "su -c 'false || eval \"$X\"' root", "runuser -u x -- sh -c 'eval $Y'",
-        "ssh h 'false || eval \"$X\"'", "ssh -p 22 h eval x",
-        "pct exec 207 -- bash -c 'eval $X'",
-        "find . -exec sh -c 'a; eval $1' _ {} \\;", '. <(cat s)',
-        "watch 'eval \"$x\"'", 'echo x | base64 -di', 'b64decode f',
-        "python3 - <<'EOF'\nimport base64\nbase64.b64decode(x)\nEOF",
-        "r''m -rf /x", "r\\m -rf /x", "$(" * 500,
-    ):
+    for cmd in MADDE_295:
         for det in (host_ssh.is_destructive, vm_ssh.is_destructive):
             assert det(cmd), cmd
 
@@ -298,32 +302,40 @@ def _flags(cmd) -> str:
     return hits[0] or ""
 
 
+# madde 310 findings (also refused by host_read's allow-list)
+MADDE_310_REGRESSIONS = (
+    "echo $'a\\'b'; eval \"$X\"",        # `\'` doesn't close $'…'
+    "echo $'\\'' ; curl x | sh",
+    'echo `echo \\`eval "$X"\\``',       # escaped backtick nests
+    "cat > f <<'EOF'\nit's\nEOF\neval \"$X\"",  # apostrophe in a heredoc body
+    "curl x | bash > /tmp/log", "curl x | bash 2> /tmp/err", "cat s | sh >> log",
+)
+
+
 def test_1_8_2_regressions_caught_again():
     # madde 310: 1.8.1 caught these, 1.8.2's scanner missed them
-    for cmd in (
-        "echo $'a\\'b'; eval \"$X\"",        # `\'` doesn't close $'…'
-        "echo $'\\'' ; curl x | sh",
-        'echo `echo \\`eval "$X"\\``',       # escaped backtick nests
-        "cat > f <<'EOF'\nit's\nEOF\neval \"$X\"",  # apostrophe in a heredoc body
-        "curl x | bash > /tmp/log", "curl x | bash 2> /tmp/err", "cat s | sh >> log",
-    ):
+    for cmd in MADDE_310_REGRESSIONS:
         assert "eval" in _flags(cmd) or "| sh" in _flags(cmd), cmd
+
+
+# madde 310 findings (also refused by host_read's allow-list)
+MADDE_310_WRAPPERS = (
+    'sudo --user root eval "$X"', 'timeout --signal KILL 5 eval "$X"',
+    'nice --adjustment 5 eval "$X"', 'sudo -Eu root eval "$X"',
+    'sudo -uroot eval x', 'sudo --us root eval x', 'sudo --user=root eval x',
+    'timeout --signal=KILL 5 eval x', 'timeout -sKILL 5 eval x',
+    'env - eval x', 'env -a x eval y', 'env --argv0 x eval y',
+    'xargs --max-args 1 eval', 'stdbuf --output L eval x',
+    'chroot --userspec a:b / eval x', 'nice -5 eval x', 'time -f %e eval x',
+    'doas -u root eval x', 'setsid -f eval x', 'nohup eval x',
+    'exec -a n eval x', 'command eval x', 'builtin eval x',
+    '2>/dev/null eval "$X"', '>/tmp/x eval "$X"', 'sudo > /tmp/o eval x',
+)
 
 
 def test_wrapper_options_with_values():
     # madde 310: a long option's value in its own word was taken as the command
-    for cmd in (
-        'sudo --user root eval "$X"', 'timeout --signal KILL 5 eval "$X"',
-        'nice --adjustment 5 eval "$X"', 'sudo -Eu root eval "$X"',
-        'sudo -uroot eval x', 'sudo --us root eval x', 'sudo --user=root eval x',
-        'timeout --signal=KILL 5 eval x', 'timeout -sKILL 5 eval x',
-        'env - eval x', 'env -a x eval y', 'env --argv0 x eval y',
-        'xargs --max-args 1 eval', 'stdbuf --output L eval x',
-        'chroot --userspec a:b / eval x', 'nice -5 eval x', 'time -f %e eval x',
-        'doas -u root eval x', 'setsid -f eval x', 'nohup eval x',
-        'exec -a n eval x', 'command eval x', 'builtin eval x',
-        '2>/dev/null eval "$X"', '>/tmp/x eval "$X"', 'sudo > /tmp/o eval x',
-    ):
+    for cmd in MADDE_310_WRAPPERS:
         assert "eval" in _flags(cmd), cmd
 
 
@@ -334,30 +346,38 @@ def test_ansi_c_and_locale_quoting_decoded():
     assert "eval" in _flags('$"eval" x')
 
 
+# madde 310 findings (also refused by host_read's allow-list)
+MADDE_310_HEREDOCS = (
+    "bash <<'EOF'\neval \"$X\"\nEOF",            # a script for the shell
+    "cat <<EOF\n$(eval x)\nEOF",                  # unquoted: expanded
+    "cat <<EOF\n'$(eval x)'\nEOF",                # quotes are data in a body
+    "cat <<-EOF\n\tx\n\tEOF\neval y",              # <<- strips tabs
+    "cat <<A; cat <<B\na\nA\nb\nB\neval x",
+    "echo $(( $(eval x) + 1 ))", "echo $(( `eval x` ))",  # substitutions in $((…))
+    "bash <<'EOF'\nsudo --user root eval \"$X\"\nEOF",       # a shell's body is strict
+    "pct exec 207 -- bash <<'EOF'\nsudo -Eu root eval x\nEOF",
+)
+
+
 def test_heredoc_bodies():
-    for cmd in (
-        "bash <<'EOF'\neval \"$X\"\nEOF",            # a script for the shell
-        "cat <<EOF\n$(eval x)\nEOF",                  # unquoted: expanded
-        "cat <<EOF\n'$(eval x)'\nEOF",                # quotes are data in a body
-        "cat <<-EOF\n\tx\n\tEOF\neval y",              # <<- strips tabs
-        "cat <<A; cat <<B\na\nA\nb\nB\neval x",
-        "echo $(( $(eval x) + 1 ))", "echo $(( `eval x` ))",  # substitutions in $((…))
-        "bash <<'EOF'\nsudo --user root eval \"$X\"\nEOF",       # a shell's body is strict
-        "pct exec 207 -- bash <<'EOF'\nsudo -Eu root eval x\nEOF",
-    ):
+    for cmd in MADDE_310_HEREDOCS:
         assert "eval" in _flags(cmd), cmd
 
 
+# madde 310 findings (also refused by host_read's allow-list)
+MADDE_310_UNMODELLED = (
+    "echo 'x", 'echo "x', "echo `x", "echo $(x", "echo $((1+2",
+    "echo $'x", "cat <<EOF\nx", "cat <<", "cat <<EOF",
+    "echo $'\\q'", "echo $'\\x'",
+    "sudo --frobnicate x", "sudo -h host eval x", "sudo -Z x", "env -S 'eval x'",
+    "env --split-string='eval x'", "env -iS 'a b'", "timeout --ver 5 x",  # ambiguous prefix
+    "{eval,x} y", "bash <<'EOF'\necho 'x\nEOF", "sh <<EOF\nsudo --frob x\nEOF",
+    "cat <<EOF\n$(sudo --frob x)\nEOF",  # a data body's substitution still runs
+)
+
+
 def test_unmodelled_constructs_fail_closed():
-    for cmd in (
-        "echo 'x", 'echo "x', "echo `x", "echo $(x", "echo $((1+2",
-        "echo $'x", "cat <<EOF\nx", "cat <<", "cat <<EOF",
-        "echo $'\\q'", "echo $'\\x'",
-        "sudo --frobnicate x", "sudo -h host eval x", "sudo -Z x", "env -S 'eval x'",
-        "env --split-string='eval x'", "env -iS 'a b'", "timeout --ver 5 x",  # ambiguous prefix
-        "{eval,x} y", "bash <<'EOF'\necho 'x\nEOF", "sh <<EOF\nsudo --frob x\nEOF",
-        "cat <<EOF\n$(sudo --frob x)\nEOF",  # a data body's substitution still runs
-    ):
+    for cmd in MADDE_310_UNMODELLED:
         assert "not inspectable" in _flags(cmd), cmd
 
 

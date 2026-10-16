@@ -5,6 +5,56 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.9.0] - 2026-10-16
+
+### Security
+- `proxmox_host_read_exec` is now a pure **allow-list** (madde 309). The
+  deny-list scanner it replaced was beaten in every review round (madde 295,
+  310, 312, 316, 317): GNU prefixes (`dmidecode --dump-b`, `dmesg --cle`,
+  `coredumpctl --outp`), an attached `-oKEY=VAL` (`apt-cache -oDir::Cache=…`),
+  an unlisted smartctl log that writes (`-l scttempint,N`), a value-taking
+  option hiding the subcommand. Now nothing passes unless it is listed:
+  - **program** by bare name (or from `/usr/bin`, `/usr/sbin`, `/bin`,
+    `/sbin`); **subcommand** for zfs, zpool, systemctl, pct, qm, pvesm, pvesh,
+    apt, apt-cache, apt-mark, chronyc, coredumpctl, proxmox-boot-tool, and
+    `ip OBJECT show/list` (route/neigh `get`);
+  - **option** by exact spelling, short and long forms listed separately — no
+    abbreviation; `--opt=val` only for a value-taking option; an attached
+    short value (`-n50`, `-A3`, `-d1`) only where listed; values of
+    `smartctl -l` from a list; `date` takes only `+FORMAT`, `hostname` no operand;
+  - `pct exec <vmid> -- <cmd>`: exactly that form, one level, the inner command
+    checked by the same list.
+- Shell: a quote-aware tokenizer replaces "refuse any metacharacter in the raw
+  string". Refused: these characters unquoted — `;` `&` `|` `<` `>` `(` `)` `$`
+  backtick `\` `{` `}` `!`; a leading `#` or glob; `$`, backtick or `\` inside
+  double quotes; control characters. Quoted text may
+  hold anything (`grep -E 'a|b'`, `journalctl -g "reboot|shutdown"` now pass).
+  No pipes at all (6 of 4706 real calls used one). The tool runs the command
+  **rebuilt from the parsed words**, not the raw string.
+- The data and the validator live in `proxmox_mcp/read_allow.py`, kept
+  byte-identical in homelab-agent-sys (its `read_exec_reddi` second layer runs
+  the same file). Both repos pin its sha256 (`tests/test_host_read.py`).
+
+### Removed
+- The deny-list layers of `host_read.py` (`_READ_ALLOW`, `_DENIED_FLAGS`,
+  `_FOLLOW_HANGS`, `_OPTS`, `_PRE_SUB_FLAGS`, `_check_ip`, `_check_options`) and
+  the `host_ssh.is_destructive` backstop for this tool (it also refused reads
+  that merely mention `reboot`/`shutdown`). `proxmox_host_exec`'s gate is
+  unchanged.
+- Programs with no real read-exec use that have write/state options: `tree`,
+  `lshw`, `sensors`, `zdb`, `nvme`, `lsscsi`, `pvdisplay`/`lvdisplay`/`vgdisplay`.
+- Also refused now: `zpool status/iostat -c` (runs zpool.d scripts), `ip -n`,
+  `lspci -x`/`-q` (config dumps / DNS query), `journalctl --image=` (mounts an
+  image), `file -z/-Z` (spawn decompressors), `ps` BSD `k` sort key (`--sort=` works).
+
+### Measured
+- Every real read-exec call (AHMETPC + CT 207 + CT 215 audit logs, Claude Code
+  transcripts: 4706 calls, 1315 distinct) replayed: of the 4321 calls 1.8.4
+  passed, 4317 still pass (99.91 %; CT 207 99.87 %). The 4 lost: `ps … k -pcpu`
+  (2), `pct status N -v` (abbreviation), `grep -F [ …` (leading glob). Newly
+  passing: 125 calls (96 distinct), all quoted patterns or reads the old
+  backstop refused for a word.
+
 ## [1.8.4] - 2026-10-15
 
 ### Security
