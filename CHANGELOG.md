@@ -5,6 +5,24 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.9.2] - 2026-10-16
+
+### Security
+- `proxmox_host_read_exec` no longer runs a command that never ends. `tail`
+  accepted any operand, and GNU tail reads `tail +1f FILE` (also `+f`) as the
+  obsolete form of `-f`: it followed the file until the tool's timeout, and on
+  a quiet file the remote process could outlive the SSH channel. A `+N` operand
+  to `tail` is now digits only. `vmstat`, `iostat`, `mpstat`, `arcstat` and
+  `zpool status/list/iostat` repeat forever when given an interval alone
+  (`vmstat 1`, `zpool iostat -v 1`, and a zero count for zpool): a trailing
+  interval now needs a nonzero count (`vmstat 1 5`), and those operands may
+  not glob (an expansion could produce a bare interval). Same rule inside
+  `pct exec`.
+- Real-use cost (same corpus as 1.9.1, 4973 calls): none of the 4694 calls
+  1.9.1 passes is refused.
+- `read_allow.py` shared byte for byte with homelab-agent-sys (0.124.3);
+  pinned sha256 `28b38605…5d85`.
+
 ## [1.9.1] - 2026-10-16
 
 ### Security

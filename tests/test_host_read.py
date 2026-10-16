@@ -25,7 +25,7 @@ from proxmox_mcp.tools.host_read import validate_read_command  # noqa: E402
 # The shared file's fingerprint (CRLF folded to LF). homelab-agent-sys pins the SAME
 # value in tests/test_read_allow.py; change both when read_allow.py changes, and copy
 # the file byte for byte (madde 309).
-READ_ALLOW_SHA256 = "3b051b4e1f9bbff3835a15eae05befd8fe43769f60ae0c0fa0ccc24facee4197"
+READ_ALLOW_SHA256 = "28b38605e99179b3d8b005d44fbe052debe66e2a4199a405eaf2ccdb257d5d85"
 
 
 def _ok(cmd):
@@ -118,6 +118,24 @@ def test_glob_only_in_a_free_operand():
     ):
         _ok(cmd)
     assert read_allow.check("ls -la /etc/s*") == (None, "ls -la /etc/s*")
+
+
+def test_no_endless_follow_or_interval():
+    # `tail +1f F` is GNU's obsolete -f; an INTERVAL without COUNT repeats until the timeout.
+    for cmd in (
+        "tail +1f /var/log/syslog", "tail +f /var/log/syslog", "tail +5c f", "tail +1* f",
+        "vmstat 1", "vmstat 1 0", "vmstat 1*", "iostat -x 1", "iostat -x sda 2",
+        "mpstat -P ALL 1", "arcstat 1", "zpool iostat -v 1", "zpool iostat -v nvmepool 0.5",
+        "zpool status 2", "zpool list 1", "pct exec 200 -- vmstat 1",
+    ):
+        _no(cmd)
+    for cmd in (
+        "tail +5 f", "tail -n +5 f", "vmstat", "vmstat -s", "vmstat 1 5", "iostat -x sda 1 3",
+        "mpstat -P ALL 1 1", "arcstat 1 3", "zpool iostat -v nvmepool 1 2",
+        "zpool iostat 0.5 4", "zpool status -x", "zpool list 1 1", "zpool get all nvmepool",
+        "pct exec 200 -- vmstat 1 2",
+    ):
+        _ok(cmd)
 
 
 def test_rebuilt_command_is_what_runs():

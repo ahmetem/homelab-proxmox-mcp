@@ -295,11 +295,16 @@ SPEC: dict[str, object] = {
     "ip": "special",   # _ip(): [flags] OBJECT [show|list|…]
 }
 
-# Operand rules (default: any operand). "none": no operand at all.
+# Operand rules, by program or "program subcommand" (default: any operand).
+# "none": no operand at all. "count": a trailing `INTERVAL` repeats forever, so it needs
+# a nonzero `COUNT` after it (`vmstat 1 5`), and no glob may make one up.
 OPERANDS = {
     "date": "+",          # only +FORMAT; a bare operand sets the clock
+    "tail": "+N",         # `+N` only: `tail +1f FILE` is the obsolete form of -f
     "hostname": "none", "uname": "none", "free": "none", "uptime": "none",
     "nproc": "none", "arch": "none", "lsmod": "none", "whoami": "none",
+    **{k: "count" for k in ("vmstat", "iostat", "mpstat", "arcstat", "zpool status",
+                            "zpool list", "zpool iostat")},
 }
 # Value allow-lists: (program, option) -> fullmatch pattern for the value.
 _SMART_LOG = (r"error|xerror(,\d+)?|selftest|xselftest(,\d+)?|selective|directory|"
@@ -518,7 +523,7 @@ def _validate(argv: list[str], depth: int) -> tuple[Optional[str], list[int]]:
     args = argv[1:]
     if prog == "ip":
         return _ip(args), []
-    base = 1   # argv index of the first word the final _options walks
+    base, key = 1, prog   # argv index of the first word the final _options walks; OPERANDS key
     if isinstance(spec, dict):
         glob = spec.get("", "")
         err, _, at = _options(prog, glob, args, stop_at_operand=True)
@@ -534,18 +539,31 @@ def _validate(argv: list[str], depth: int) -> tuple[Optional[str], list[int]]:
             return f"'{prog} {sub}' is not a read-only subcommand (allowed: {_subs(spec)}).", []
         if prog == "pct" and sub == "exec":
             return _pct_exec(args[at:], depth), []
-        base = at + 2
+        base, key = at + 2, f"{prog} {sub}"
         err, ops, _ = _options(prog, (glob + " " + spec[sub]).strip(), rest)
     else:
         err, ops, _ = _options(prog, str(spec), args)
     if err:
         return err, []
     operands = [argv[base + i] for i in ops]
-    rule = OPERANDS.get(prog)
+    rule = OPERANDS.get(key)
     if rule == "none" and operands:
         return f"'{prog} {operands[0]}': {prog} takes no operand here.", []
     if rule == "+" and any(not o.startswith("+") for o in operands):
         return f"'{prog}' takes only a +FORMAT operand (a bare operand sets the clock).", []
+    if rule == "+N" and any(o[:1] == "+" and not re.fullmatch(r"\+\d+", o) for o in operands):
+        return f"'{prog}' takes a +N operand as digits only (`+1f` would follow the file).", []
+    if rule == "count":
+        if any(_GLOB.intersection(o) for o in operands):
+            return f"'{key}': no glob in its operands (one could expand into an interval).", []
+        nums = []
+        for o in reversed(operands):
+            if not re.fullmatch(r"\d+(\.\d+)?", o):
+                break
+            nums.insert(0, o)
+        if len(nums) == 1 or (len(nums) > 1 and float(nums[-1]) == 0):
+            return (f"'{key} {' '.join(nums)}': an interval without a nonzero count repeats "
+                    f"until the timeout; add one (`{key} {nums[0]} 5`)."), []
     return None, [base + i for i in ops]
 
 
