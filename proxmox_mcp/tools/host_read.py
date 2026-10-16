@@ -52,8 +52,9 @@ class HostReadInput(BaseModel):
             "container use `pct exec <vmid> -- <read-only command>`; the inner "
             "command is checked the same way. No pipes, redirects, chaining or "
             "substitution (quoted text may contain any of these characters) — "
-            "for those use proxmox_host_exec. Globs are allowed except at the "
-            "start of a word."
+            "for those use proxmox_host_exec. An unquoted glob is allowed only in "
+            "a path/operand of the host command, never at the start of a word; "
+            "quote option values like --include='*.py' (and globs inside pct exec)."
         ),
         min_length=1, max_length=4096,
     )

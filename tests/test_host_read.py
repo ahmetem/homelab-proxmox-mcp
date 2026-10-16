@@ -25,7 +25,7 @@ from proxmox_mcp.tools.host_read import validate_read_command  # noqa: E402
 # The shared file's fingerprint (CRLF folded to LF). homelab-agent-sys pins the SAME
 # value in tests/test_read_allow.py; change both when read_allow.py changes, and copy
 # the file byte for byte (madde 309).
-READ_ALLOW_SHA256 = "21a9b7a0aadf1841c95994b5ae4a47176d5b7af3d96edfacc48866267cf5b641"
+READ_ALLOW_SHA256 = "3b051b4e1f9bbff3835a15eae05befd8fe43769f60ae0c0fa0ccc24facee4197"
 
 
 def _ok(cmd):
@@ -92,6 +92,32 @@ def test_quotes_and_globs():
     _no("grep -F [ f")
     _no("cat f #x")                               # a comment
     _no("cat f\tx\x0b")                           # control character
+
+
+def test_glob_only_in_a_free_operand():
+    # A glob expands into any number of words: outside an operand it shifts what follows
+    # (`systemctl -p s* status x` + files `sa`, `stop` in the cwd = `-p sa stop status x`).
+    for cmd in (
+        "systemctl -p s* status pve-cluster", "systemctl -t s* list-units",
+        "coredumpctl -S s* list", "systemctl --property=s* status x",
+        "zfs list -o name* pool", "grep --include=*.sh -r x /root", "grep -e ^[[] f",
+        "ip -f s* link show", "ip link show s*",
+        "pct exec 2* -- ls", "pct exec 20[0] -- ls",
+        "pct exec 200 -- systemctl -p s* status x",     # inner: before the subcommand
+        "pct exec 200 -- ls /etc/s*",                   # inner: would expand on the HOST
+    ):
+        _no(cmd)
+    err, _ = read_allow.check("systemctl -p s* status pve-cluster")
+    assert err and "unquoted glob in 's*'" in err and "Quote it" in err, err
+    for cmd in (
+        "ls /etc/s*", "ls -la /etc/s* /var/l?g", "systemctl status pve*",
+        "grep -H -e '^[[]' -e '^lock:' /etc/pve/lxc/*.conf /etc/pve/qemu-server/*.conf",
+        "grep --include='*.sh' -r x /root", "systemctl -p 's*' status x",
+        "pct exec 200 -- ls '/etc/s*'", "date +%s*",
+        "journalctl -n 1*",   # `1*` fails -n's NEXT pattern, so it is an operand
+    ):
+        _ok(cmd)
+    assert read_allow.check("ls -la /etc/s*") == (None, "ls -la /etc/s*")
 
 
 def test_rebuilt_command_is_what_runs():

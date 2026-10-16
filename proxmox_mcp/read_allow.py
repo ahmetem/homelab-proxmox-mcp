@@ -32,6 +32,13 @@ Option syntax inside a SPEC string (space-separated):
   -NUM     legacy `-<digits>` count (`head -5`, `tail -100`, `grep -3`)
 A word is an option iff it starts with `-` and is not `-`; after `--` all are operands.
 A value consumed by an option is not inspected (`--since -20min` is a value).
+An unquoted glob (* ? [) is allowed only in a free operand of the host command: bash
+would expand it anywhere else too, into any number of words, and a word count the
+validator did not see shifts what follows (`systemctl -p s* status x` with files `sa`
+and `stop` in the cwd runs `systemctl -p sa stop status x`). Option values, the program,
+subcommands and every word before one, and the whole `pct exec` command are refused
+with an unquoted glob; quoting passes it literally. An operand's expansions are more
+operands -- never an option, as no word may start with a glob.
 
 Shell boundary: the command is split by a quote-aware tokenizer that models the only
 bash syntax left once these are refused -- unquoted ; & | < > ( ) $ ` \\ { } !, an
@@ -44,7 +51,7 @@ the caller runs that, not the raw string.
 
 `pct exec <vmid> -- <command>` runs a command inside a CT. The words must be exactly
 `pct exec <digits> --`; the inner command is validated by this same function; one
-level only.
+level only; no unquoted glob in it (the host's shell would expand it on the host).
 """
 from __future__ import annotations
 
@@ -362,6 +369,7 @@ def _tokenize(command: str):
             return None, "shell character(s) " + " ".join(meta)
         if cur is None and text[0] == "#":
             return None, "a comment"
+        # Keeps every expansion of an operand glob an operand (see check()).
         g = next((p for p, ch in enumerate(text) if ch in _GLOB), None)
         if g is not None and not "".join(t for t, _ in cur or []) + text[:g]:
             return None, f"a word starting with a glob ({text!r}: it could expand to an option)"
@@ -401,10 +409,10 @@ def _parse_spec(spec: str) -> tuple:
 
 
 def _options(prog: str, spec: str, args: list[str],
-             stop_at_operand: bool = False) -> tuple[Optional[str], list[str], int]:
-    """Walk `args` against `spec`. Returns (error, operands, index_of_stop)."""
+             stop_at_operand: bool = False) -> tuple[Optional[str], list[int], int]:
+    """Walk `args` against `spec`. Returns (error, operand indices, index_of_stop)."""
     flags, vals, attach, opt, lflags, lvals, lopt, num = _parse_spec(spec)
-    operands: list[str] = []
+    operands: list[int] = []
     k = 0
 
     def no(word: str, why: str = "is not a listed read-only option") -> str:
@@ -422,12 +430,12 @@ def _options(prog: str, spec: str, args: list[str],
         if a == "--":
             if stop_at_operand:   # the next word is the subcommand
                 return None, operands, k
-            operands += args[k:]
+            operands += range(k, len(args))
             return None, operands, len(args)
         if not a.startswith("-") or a == "-":
             if stop_at_operand:
                 return None, operands, k - 1
-            operands.append(a)
+            operands.append(k - 1)
             continue
         if a.startswith("--"):
             name, eq, val = a.partition("=")
@@ -497,44 +505,48 @@ def _ip(args: list[str]) -> Optional[str]:
             + "/".join(sorted(IP_READ)) + ", and get for route/neigh).")
 
 
-def _validate(argv: list[str], depth: int) -> Optional[str]:
+def _validate(argv: list[str], depth: int) -> tuple[Optional[str], list[int]]:
+    """(error, indices into argv of the free operands)."""
     head = argv[0]
     prog = PurePosixPath(head).name
     if head != prog and str(PurePosixPath(head).parent) not in _PATH_DIRS:
-        return f"'{head}': a program is named bare or from {', '.join(sorted(_PATH_DIRS))}."
+        return f"'{head}': a program is named bare or from {', '.join(sorted(_PATH_DIRS))}.", []
     spec = SPEC.get(prog)
     if spec is None:
         return (f"'{prog}' is not in the read-only allow-list (allowed: "
-                + ", ".join(sorted(SPEC)) + ").")
+                + ", ".join(sorted(SPEC)) + ")."), []
     args = argv[1:]
     if prog == "ip":
-        return _ip(args)
+        return _ip(args), []
+    base = 1   # argv index of the first word the final _options walks
     if isinstance(spec, dict):
         glob = spec.get("", "")
         err, _, at = _options(prog, glob, args, stop_at_operand=True)
         if err:
-            return err
+            return err, []
         if at >= len(args):
             if prog != "systemctl":   # a bare `systemctl [opts]` is list-units
-                return f"'{prog}' needs a subcommand (allowed: {_subs(spec)})."
+                return f"'{prog}' needs a subcommand (allowed: {_subs(spec)}).", []
             sub, rest = "list-units", []
         else:
             sub, rest = args[at], args[at + 1:]
         if sub not in spec or sub == "":
-            return f"'{prog} {sub}' is not a read-only subcommand (allowed: {_subs(spec)})."
+            return f"'{prog} {sub}' is not a read-only subcommand (allowed: {_subs(spec)}).", []
         if prog == "pct" and sub == "exec":
-            return _pct_exec(args[at:], depth)
-        err, operands, _ = _options(prog, (glob + " " + spec[sub]).strip(), rest)
+            return _pct_exec(args[at:], depth), []
+        base = at + 2
+        err, ops, _ = _options(prog, (glob + " " + spec[sub]).strip(), rest)
     else:
-        err, operands, _ = _options(prog, str(spec), args)
+        err, ops, _ = _options(prog, str(spec), args)
     if err:
-        return err
+        return err, []
+    operands = [argv[base + i] for i in ops]
     rule = OPERANDS.get(prog)
     if rule == "none" and operands:
-        return f"'{prog} {operands[0]}': {prog} takes no operand here."
+        return f"'{prog} {operands[0]}': {prog} takes no operand here.", []
     if rule == "+" and any(not o.startswith("+") for o in operands):
-        return f"'{prog}' takes only a +FORMAT operand (a bare operand sets the clock)."
-    return None
+        return f"'{prog}' takes only a +FORMAT operand (a bare operand sets the clock).", []
+    return None, [base + i for i in ops]
 
 
 def _subs(spec: dict) -> str:
@@ -548,7 +560,7 @@ def _pct_exec(args: list[str], depth: int) -> Optional[str]:
     if len(args) < 3 or not args[1].isdigit() or args[2] != "--" or len(args) < 4:
         return ("'pct exec' must be exactly `pct exec <vmid> -- <read-only command>` "
                 "(no options, numeric vmid, '--' required, a command after it).")
-    err = _validate(args[3:], depth + 1)
+    err, _ = _validate(args[3:], depth + 1)
     return None if err is None else f"inside CT {args[1]}: {err}"
 
 
@@ -563,9 +575,15 @@ def check(command) -> tuple[Optional[str], Optional[str]]:
     if not words:
         return "empty command.", None
     argv = ["".join(t for t, _ in w) for w in words]
-    err = _validate(argv, 0)
+    err, operands = _validate(argv, 0)
     if err:
         return err, None
+    globbed = [argv[i] for i, w in enumerate(words) if i not in operands
+               and any(not q and _GLOB.intersection(t) for t, q in w)]
+    if globbed:
+        return (f"unquoted glob in {globbed[0]!r}: only a path operand of the host command "
+                "may glob (elsewhere bash can expand it into extra words; inside `pct exec` "
+                "it expands on the host). Quote it to pass it literally."), None
     return None, _rebuild(words)
 
 

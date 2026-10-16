@@ -5,6 +5,31 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.9.1] - 2026-10-16
+
+### Security
+- `proxmox_host_read_exec`: an **unquoted glob** (`*` `?` `[`) is now allowed only
+  in a free operand of the host command. 1.9.0 inspected neither a value consumed
+  by an option nor a glob in mid-word, and ran the word unquoted:
+  `systemctl -p s* status pve-cluster` passed, and with files `sa` and `stop` in
+  root's home bash ran `systemctl -p sa stop status pve-cluster` -- a service stop
+  through the read tool. The same held for every value-taking option before a
+  subcommand (`systemctl -t s* list-units`, `coredumpctl -S s* list`, `ip -f s*`).
+  Refused now: a glob in an option value (`--include=*.sh`, `-e ^[[]`), in the
+  program, a subcommand or any word before one, in `ip`, and anywhere in a
+  `pct exec` command (it would expand on the host, not in the CT). Operands keep
+  their glob (`ls /etc/s*`, `grep … /etc/pve/lxc/*.conf`): their expansions are
+  more operands, never options, because no word may start with a glob. The
+  error says to quote the word, which passes it literally.
+- Rejected rather than quoted in the rebuilt command: `read_allow.validate()` is
+  also homelab-agent-sys's S1/S5 decision on the RAW string, so it must stay true
+  that an accepted string is safe as written.
+- Real-use cost (audit logs of AHMETPC, CT 207, CT 215 + transcripts, 4973 calls):
+  of the 4707 calls 1.9.0 passed, 13 (8 distinct) are refused -- all
+  `--include=*.x`, `-e ^[[]` or a glob inside `pct exec`, each fixed by quoting.
+- `read_allow.py` is shared byte for byte with homelab-agent-sys (0.123.1);
+  pinned sha256 `3b051b4e…4197` in both repos.
+
 ## [1.9.0] - 2026-10-16
 
 ### Security
