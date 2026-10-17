@@ -42,8 +42,8 @@ operands -- never an option, as no word may start with a glob.
 
 Shell boundary: the command is split by a quote-aware tokenizer that models the only
 bash syntax left once these are refused -- unquoted ; & | < > ( ) $ ` \\ { } !, an
-unquoted `#` or glob (* ? [) at the start of a word, `$` ` \\ inside double quotes, any
-control character. What remains is words made of plain, '…' and "…" segments, which
+unquoted `#` or glob (* ? [) at the start of a word, an unquoted `~` at the start of a
+word or after `=`/`:`, `$` ` \\ inside double quotes, any control character. What remains is words made of plain, '…' and "…" segments, which
 bash and this tokenizer read the same way. There is NO pipe, redirection, chaining or
 substitution in this tool (a pipe chain was considered and left out: 6 of 4706 real
 calls used one). `check()` also returns the command rebuilt from the parsed words;
@@ -296,11 +296,14 @@ SPEC: dict[str, object] = {
 }
 
 # Operand rules, by program or "program subcommand" (default: any operand).
-# "none": no operand at all. "count": a trailing `INTERVAL` repeats forever, so it needs
-# a nonzero `COUNT` after it (`vmstat 1 5`), and no glob may make one up.
+# "none": no operand at all. "count": a trailing `INTERVAL` repeats forever, so the
+# numbers must be exactly `INTERVAL COUNT` at the end, COUNT a whole number > 0
+# (`vmstat 1 5`); every other operand is a name (starts with a letter or `/`), so no
+# `+1`, ` 1`, `.5`, `0_0`, `0x1` a number parser might read, and no glob.
 OPERANDS = {
     "date": "+",          # only +FORMAT; a bare operand sets the clock
     "tail": "+N",         # `+N` only: `tail +1f FILE` is the obsolete form of -f
+    "lsof": "no+",        # `+r` repeats forever, `+m` writes a mount supplement file
     "hostname": "none", "uname": "none", "free": "none", "uptime": "none",
     "nproc": "none", "arch": "none", "lsmod": "none", "whoami": "none",
     **{k: "count" for k in ("vmstat", "iostat", "mpstat", "arcstat", "zpool status",
@@ -378,6 +381,12 @@ def _tokenize(command: str):
         g = next((p for p, ch in enumerate(text) if ch in _GLOB), None)
         if g is not None and not "".join(t for t, _ in cur or []) + text[:g]:
             return None, f"a word starting with a glob ({text!r}: it could expand to an option)"
+        # Tilde expansion: at the start of a word, and after `=`/`:` in `NAME=...`
+        # (refused after any `=`/`:`). Inside `pct exec` it would name the host's home.
+        before = "".join(t for t, _ in cur or [])
+        if any((before + text[:p])[-1:] in ("", "=", ":")
+               for p, ch in enumerate(text) if ch == "~"):
+            return None, f"an unquoted '~' in {text!r} (bash expands it; quote it or write the path)"
         cur = (cur or []) + [(text, False)]
         i = j
     if cur is not None:
@@ -429,6 +438,19 @@ def _options(prog: str, spec: str, args: list[str],
             return no(f"{name} {value}", "is not an allowed value")
         return None
 
+    def next_value(name: str) -> Optional[str]:
+        """An optional value as the NEXT word takes it when it matches NEXT; a glob
+        there is refused, as its expansion could match and be taken (`-n 1*`)."""
+        nonlocal k
+        rx = NEXT.get((prog, name))
+        if rx and k < len(args):
+            if re.fullmatch(rx, args[k]):
+                k += 1
+            elif _GLOB.intersection(args[k]):
+                return no(f"{name} {args[k]}", "is ambiguous: the glob could expand into "
+                          f"{name}'s value; give the value first (`{name} 50 {args[k]}`)")
+        return None
+
     while k < len(args):
         a = args[k]
         k += 1
@@ -447,9 +469,9 @@ def _options(prog: str, spec: str, args: list[str],
             if name in lflags and not eq:
                 continue
             if name in lopt:
-                if not eq and (prog, name) in NEXT and k < len(args) \
-                        and re.fullmatch(NEXT[(prog, name)], args[k]):
-                    k += 1
+                err = None if eq else next_value(name)
+                if err:
+                    return err, [], k
                 continue
             if name in lvals:
                 if not eq:
@@ -482,9 +504,9 @@ def _options(prog: str, spec: str, args: list[str],
                     return err, [], k
                 break
             if ch in opt:
-                rx = NEXT.get((prog, "-" + ch))
-                if p == len(a) and rx and k < len(args) and re.fullmatch(rx, args[k]):
-                    k += 1
+                err = next_value("-" + ch) if p == len(a) else None
+                if err:
+                    return err, [], k
                 break
             return no(a if len(a) == 2 else f"{a} (-{ch})"), [], k
     return None, operands, len(args)
@@ -553,17 +575,22 @@ def _validate(argv: list[str], depth: int) -> tuple[Optional[str], list[int]]:
         return f"'{prog}' takes only a +FORMAT operand (a bare operand sets the clock).", []
     if rule == "+N" and any(o[:1] == "+" and not re.fullmatch(r"\+\d+", o) for o in operands):
         return f"'{prog}' takes a +N operand as digits only (`+1f` would follow the file).", []
+    if rule == "no+" and any(o[:1] == "+" for o in operands):
+        return f"'{prog} +…' options are not listed (`+r` repeats, `+m` writes a file).", []
     if rule == "count":
         if any(_GLOB.intersection(o) for o in operands):
             return f"'{key}': no glob in its operands (one could expand into an interval).", []
-        nums = []
-        for o in reversed(operands):
-            if not re.fullmatch(r"\d+(\.\d+)?", o):
-                break
-            nums.insert(0, o)
-        if len(nums) == 1 or (len(nums) > 1 and float(nums[-1]) == 0):
-            return (f"'{key} {' '.join(nums)}': an interval without a nonzero count repeats "
-                    f"until the timeout; add one (`{key} {nums[0]} 5`)."), []
+        odd = [o for o in operands if not (o[:1].isalpha() or o[:1] == "/"
+                                           or re.fullmatch(r"\d+(\.\d+)?", o))]
+        if odd:
+            return (f"'{key} {odd[0]}': an operand is a name or a plain number "
+                    f"(`{key} 1 5`)."), []
+        nums = [o for o in operands if o[:1].isdigit()]
+        if nums and (len(nums) != 2 or operands[-2:] != nums
+                     or not re.fullmatch(r"[1-9]\d*", nums[1])):
+            return (f"'{key} {' '.join(nums)}': numbers must be `INTERVAL COUNT` at the end "
+                    f"with a whole COUNT > 0, else it repeats until the timeout "
+                    f"(`{key} {nums[0]} 5`)."), []
     return None, [base + i for i in ops]
 
 
@@ -582,9 +609,15 @@ def _pct_exec(args: list[str], depth: int) -> Optional[str]:
     return None if err is None else f"inside CT {args[1]}: {err}"
 
 
-def check(command) -> tuple[Optional[str], Optional[str]]:
+KILL_AFTER = 5   # seconds between timeout's SIGTERM and SIGKILL
+
+
+def check(command, timeout: Optional[float] = None) -> tuple[Optional[str], Optional[str]]:
     """(None, command_to_run) if `command` is an allow-listed read, else (reason, None).
-    The command to run is rebuilt from the parsed words (see the module docstring)."""
+    The command to run is rebuilt from the parsed words (see the module docstring).
+    With `timeout`, it runs under coreutils `timeout -k KILL_AFTER <timeout>`, and so
+    does a `pct exec` inner command (killing pct on the host need not reach the CT):
+    the one bound on what the rules cannot see -- a big interval, a blocking device."""
     if not isinstance(command, str):
         return "not a string", None
     words, err = _tokenize(command)
@@ -602,6 +635,13 @@ def check(command) -> tuple[Optional[str], Optional[str]]:
         return (f"unquoted glob in {globbed[0]!r}: only a path operand of the host command "
                 "may glob (elsewhere bash can expand it into extra words; inside `pct exec` "
                 "it expands on the host). Quote it to pass it literally."), None
+    if timeout is not None:
+        limit = [[(w, False)] for w in ("timeout", "-k", str(KILL_AFTER), f"{timeout:g}")]
+        if PurePosixPath(argv[0]).name == "pct":   # no option before its subcommand
+            sub = 2 if argv[1] == "--" else 1
+            if argv[sub] == "exec":
+                words = words[:sub + 3] + limit + words[sub + 3:]
+        words = limit + words
     return None, _rebuild(words)
 
 

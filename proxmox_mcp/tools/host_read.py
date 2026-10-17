@@ -27,15 +27,29 @@ from proxmox_mcp.format import truncate
 from proxmox_mcp.mcp_instance import mcp
 
 
+def _refusal(err: str) -> str:
+    return (f"Refused: {err} This tool runs one allow-listed read-only command "
+            "(no pipes, redirects, chaining or substitution); for anything else "
+            "use proxmox_host_exec (with confirm).")
+
+
 def validate_read_command(command: str) -> Optional[str]:
     """Return None if `command` is an allow-listed read-only host command, else
     the rejection message. Pure function — unit-testable."""
     err = read_allow.validate(command)
-    if err is None:
-        return None
-    return (f"Refused: {err} This tool runs one allow-listed read-only command "
-            "(no pipes, redirects, chaining or substitution); for anything else "
-            "use proxmox_host_exec (with confirm).")
+    return None if err is None else _refusal(err)
+
+
+# Bounds on what the allow-list cannot see (madde 325): `timeout` (read_allow.check)
+# ends a big interval or a blocking read; RLIMIT_DATA stops `tail /dev/zero`, which
+# buffers a line that never ends (~3 GB/s); `head -c` stops `cat /dev/zero` at the
+# output cap instead of streaming it into this process. Host login shell is bash.
+DATA_LIMIT_KB = 1024 * 1024
+
+
+def remote_command(run: str) -> str:
+    return (f"ulimit -d {DATA_LIMIT_KB}; {run} | head -c {host_ssh.MAX_OUTPUT_BYTES + 1}; "
+            "exit ${PIPESTATUS[0]}")
 
 
 class HostReadInput(BaseModel):
@@ -59,7 +73,9 @@ class HostReadInput(BaseModel):
         min_length=1, max_length=4096,
     )
     timeout: float = Field(
-        default=30.0, description="Per-call timeout in seconds.", ge=1.0, le=120.0,
+        default=30.0, ge=1.0, le=120.0,
+        description="Seconds the command may run; then it is stopped on the host (and "
+                    "inside the CT for pct exec) and its output so far returned.",
     )
     max_chars: int = Field(
         default=20000,
@@ -94,16 +110,16 @@ async def proxmox_host_read_exec(params: HostReadInput) -> str:
     if cfg:
         return cfg
 
-    err = validate_read_command(params.command)
-    if err:
+    # Run the command rebuilt from the validated words, not the raw string.
+    err, run = read_allow.check(params.command, timeout=params.timeout)
+    if err or run is None:
+        err = _refusal(err or "")
         host_ssh.audit_log(params.command, None, note=f"read-exec REFUSED: {err[:120]}")
         return err
-    # Run the command rebuilt from the validated words, not the raw string.
-    run = read_allow.check(params.command)[1]
-    assert run is not None  # validated just above
 
     try:
-        rc, stdout, stderr = await host_ssh.exec_command(run, timeout=params.timeout)
+        rc, stdout, stderr = await host_ssh.exec_command(
+            remote_command(run), timeout=params.timeout + read_allow.KILL_AFTER + 5)
     except Exception as exc:
         host_ssh.audit_log(
             params.command, None, note=f"FAILED read-exec: {type(exc).__name__}: {exc}"
@@ -117,6 +133,10 @@ async def proxmox_host_read_exec(params: HostReadInput) -> str:
     )
 
     parts = [f"host=`{config.PROXMOX_SSH_HOST}`  rc={rc}"]
+    if rc in (124, 137):
+        parts.append(f"_(stopped by the {params.timeout:g}s timeout)_")
+    elif rc == 141:
+        parts.append(f"_(stopped at the {host_ssh.MAX_OUTPUT_BYTES} byte output cap)_")
     if stdout.strip():
         parts.append("**stdout:**\n```\n" + truncate(stdout.rstrip(), params.max_chars) + "\n```")
     if stderr.strip():

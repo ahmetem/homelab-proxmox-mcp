@@ -5,6 +5,39 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.9.3] - 2026-10-17
+
+### Security
+- `proxmox_host_read_exec` now bounds what the allow-list cannot see. The
+  command runs under coreutils `timeout -k 5 <timeout>` on the host, and a
+  `pct exec` inner command under its own `timeout` inside the CT (killing pct on
+  the host need not reach the CT): a huge interval (`vmstat 86400 2`) or a
+  blocking read (`cat /proc/kmsg`) now ends at the tool's `timeout` with rc 124
+  and the output so far. Before, the SSH call timed out and the remote process
+  could keep running.
+- `tail /dev/zero` buffered a line that never ends (measured ~3 GB/s; 30 s
+  would take ~90 GB of the host's 102 GB): the host shell now sets
+  `ulimit -d 1048576` (1 GiB heap per process), so it fails in about a second
+  with "memory exhausted". `cat /dev/zero` streamed into the MCP process until
+  the timeout: output now goes through `head -c` at the 1 MiB cap (rc 141).
+  The SSH wait is the timeout + 10 s.
+- Count rule (`vmstat`, `iostat`, `mpstat`, `arcstat`, `zpool status/list/iostat`):
+  numbers must be exactly `INTERVAL COUNT` at the end with a whole COUNT > 0,
+  and every other operand must be a name (starts with a letter or `/`). Closed:
+  `vmstat +1`, `vmstat ' 1'`, `arcstat 1 0_0`, `zpool iostat .5`,
+  `zpool iostat -v pool 1 0.5`, `iostat 1 sda`, `iostat -x 1 ALL`.
+- `lsof` operands may not start with `+` (`+r` repeats forever, `+m` writes a
+  mount supplement file).
+- An unquoted `~` at the start of a word or after `=`/`:` is refused (bash
+  expands it; inside `pct exec` it named the host's home).
+- A glob right after an option with an optional next-word value is refused
+  (`journalctl -n 1*` could expand into `-n`'s value).
+- The tool validates once (`check()`), not twice with an `assert`.
+- Real-use cost (fresh corpus, 5142 calls / 1358 distinct): all 4863 calls
+  1.9.2 passes still pass.
+- `read_allow.py` shared byte for byte with homelab-agent-sys; pinned sha256
+  `931cbc1c…e123`.
+
 ## [1.9.2] - 2026-10-16
 
 ### Security

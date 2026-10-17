@@ -25,7 +25,7 @@ from proxmox_mcp.tools.host_read import validate_read_command  # noqa: E402
 # The shared file's fingerprint (CRLF folded to LF). homelab-agent-sys pins the SAME
 # value in tests/test_read_allow.py; change both when read_allow.py changes, and copy
 # the file byte for byte (madde 309).
-READ_ALLOW_SHA256 = "28b38605e99179b3d8b005d44fbe052debe66e2a4199a405eaf2ccdb257d5d85"
+READ_ALLOW_SHA256 = "931cbc1cede3eee403c6305551f6eb8fa0b836c64f2a5bc09f7e81df72afe123"
 
 
 def _ok(cmd):
@@ -113,8 +113,7 @@ def test_glob_only_in_a_free_operand():
         "ls /etc/s*", "ls -la /etc/s* /var/l?g", "systemctl status pve*",
         "grep -H -e '^[[]' -e '^lock:' /etc/pve/lxc/*.conf /etc/pve/qemu-server/*.conf",
         "grep --include='*.sh' -r x /root", "systemctl -p 's*' status x",
-        "pct exec 200 -- ls '/etc/s*'", "date +%s*",
-        "journalctl -n 1*",   # `1*` fails -n's NEXT pattern, so it is an operand
+        "pct exec 200 -- ls '/etc/s*'", "date +%s*", "journalctl -n 5 1*",
     ):
         _ok(cmd)
     assert read_allow.check("ls -la /etc/s*") == (None, "ls -la /etc/s*")
@@ -127,15 +126,55 @@ def test_no_endless_follow_or_interval():
         "vmstat 1", "vmstat 1 0", "vmstat 1*", "iostat -x 1", "iostat -x sda 2",
         "mpstat -P ALL 1", "arcstat 1", "zpool iostat -v 1", "zpool iostat -v nvmepool 0.5",
         "zpool status 2", "zpool list 1", "pct exec 200 -- vmstat 1",
+        # madde 325: number forms a parser reads but `\d+` did not, numbers not at the end
+        "vmstat +1", "vmstat ' 1'", "vmstat 1 +5", "arcstat 1 0_0", "vmstat 0x1 5",
+        "pct exec 200 -- vmstat +1", "zpool iostat .5", "zpool status .5",
+        "zpool iostat -v nvmepool 1 0.5", "vmstat 1 5.0", "iostat 1 sda", "iostat -x 1 ALL",
+        "iostat 1 sda 3", "vmstat 1 2 3", "vmstat ''", "lsof +r", "lsof +r 1", "lsof -n +m",
+        "lsof /x +L1",
     ):
         _no(cmd)
     for cmd in (
         "tail +5 f", "tail -n +5 f", "vmstat", "vmstat -s", "vmstat 1 5", "iostat -x sda 1 3",
         "mpstat -P ALL 1 1", "arcstat 1 3", "zpool iostat -v nvmepool 1 2",
         "zpool iostat 0.5 4", "zpool status -x", "zpool list 1 1", "zpool get all nvmepool",
-        "pct exec 200 -- vmstat 1 2",
+        "pct exec 200 -- vmstat 1 2", "iostat -x sda nvme0n1 2 3", "iostat /dev/sda 1 2",
+        "zpool iostat -v nvmepool 0.5 4", "lsof -n -P -i :22", "lsof /var/log/syslog",
     ):
         _ok(cmd)
+
+
+def test_no_tilde_or_glob_into_an_optional_value():
+    # madde 325: bash expands `~` (inside pct exec: the HOST's home); a glob after an
+    # option whose value is optional could expand into that value (`-n 1*` -> `-n 1`).
+    for cmd in (
+        "cat ~/.bashrc", "cat ~root/.bashrc", "ls ~", "ls ~+", "grep x a=~/b",
+        "journalctl --file=~/x", "ls a:~", "pct exec 200 -- cat ~/.bashrc",
+        "journalctl -n 1*", "journalctl -b 1*", "journalctl --lines 1*", "journalctl -n [1]",
+        "journalctl -n '1*'",   # quoting is not seen past the tokenizer; nonsense anyway
+    ):
+        _no(cmd)
+    for cmd in (
+        "cat '~/.bashrc'", "ls x~", "ls /etc/hosts~", "ls a~b", "journalctl -n 5 -u x",
+        "journalctl -n -u x", "journalctl -b -1",
+    ):
+        _ok(cmd)
+
+
+def test_timeout_wraps_the_host_and_the_ct_command():
+    t = "timeout -k 5 30"
+    for cmd, run in (
+        ("vmstat 1 5", f"{t} vmstat 1 5"),
+        ("date", f"{t} date"),
+        ("cat 'a b'", f"{t} cat 'a b'"),
+        ("pct exec 200 -- cat /etc/hosts", f"{t} pct exec 200 -- {t} cat /etc/hosts"),
+        ("pct -- exec 200 -- df -h", f"{t} pct -- exec 200 -- {t} df -h"),
+        ("/usr/sbin/pct exec 200 -- df", f"{t} /usr/sbin/pct exec 200 -- {t} df"),
+        ("pct config 200", f"{t} pct config 200"),
+    ):
+        assert read_allow.check(cmd, timeout=30.0) == (None, run), (cmd, read_allow.check(cmd, 30.0))
+    assert read_allow.check("vmstat 1 5", timeout=2.5)[1] == "timeout -k 5 2.5 vmstat 1 5"
+    assert read_allow.check("vmstat 1 5")[1] == "vmstat 1 5"
 
 
 def test_rebuilt_command_is_what_runs():
@@ -146,8 +185,7 @@ def test_rebuilt_command_is_what_runs():
     calls = []
 
     async def spy(cmd, timeout=60.0):
-        del timeout
-        calls.append(cmd)
+        calls.append((cmd, timeout))
         return 0, "ok", ""
 
     from proxmox_mcp import config, host_ssh
@@ -160,8 +198,10 @@ def test_rebuilt_command_is_what_runs():
         refused = asyncio.run(proxmox_host_read_exec(HostReadInput(command="cat a; id")))
     finally:
         host_ssh.exec_command, host_ssh.audit_log, config.require_ssh = saved
-    assert "rc=0" in out and calls == ["cat 'a b'"], (out, calls)
-    assert refused.startswith("Refused") and calls == ["cat 'a b'"], refused
+    sent = ("ulimit -d 1048576; timeout -k 5 30 cat 'a b' | head -c 1048577; "
+            "exit ${PIPESTATUS[0]}", 40.0)
+    assert "rc=0" in out and calls == [sent], (out, calls)
+    assert refused.startswith("Refused") and calls == [sent], refused
 
 
 def test_rejects_shell_operators():
